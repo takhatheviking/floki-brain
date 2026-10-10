@@ -1,0 +1,2363 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<!-- api — данные с бота (/api/brain); enc — зашифрованный снимок brain.enc (GitHub Pages, см. brain_pages.py) -->
+<meta name="brain-source" content="enc">
+<title>Мозг Флоки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Стиль — по референсу Visioboard: холст в точку, зелёное свечение из угла,
+     карточки с иконкой, статус-пилюлей и внутренней панелью, тонкие коленчатые
+     связи с белыми точками, плавающие панели, зелёный акцент, фиолетовое выделение.
+     Две темы: тёмная (как референс) и светлая; по умолчанию — как у Telegram или системы. */
+  :root, :root[data-theme="dark"] {
+    --bg: #0a0c0b; --grid: #1c201e; --glow: rgba(46, 204, 96, .16);
+    --panel: #151816; --panel-2: #1c1f1d; --card: #171a18; --card-in: #212522;
+    --border: #262a28; --border-2: #323734;
+    --text: #eef1ef; --muted: #8a918d; --faint: #5b625e;
+    --edge: #3a403c; --handle: #e9ecea; --handle-ring: transparent;
+    --accent: #3ddc68; --accent-text: #06210f; --sel: #7b6cff; --bad: #ff5d5d; --warn: #f2b84b; --info: #5aa9ff;
+    --shadow: 0 8px 28px rgba(0,0,0,.45);
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6f4; --grid: #d5dbd6; --glow: rgba(46, 204, 96, .20);
+    --panel: #ffffff; --panel-2: #f2f4f2; --card: #ffffff; --card-in: #f4f6f4;
+    --border: #e2e6e2; --border-2: #d2d8d3;
+    --text: #121614; --muted: #646c67; --faint: #a0a7a2;
+    --edge: #b9c1bb; --handle: #ffffff; --handle-ring: #b9c1bb;
+    --accent: #1fb04f; --accent-text: #ffffff; --sel: #6a5af0; --bad: #d64545; --warn: #c07d10; --info: #2f7ed8;
+    --shadow: 0 1px 2px rgba(20,30,24,.05), 0 8px 24px rgba(20,30,24,.08);
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    overflow: hidden; color: var(--text); background: var(--bg);
+    font: 13px/1.35 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--sel); outline-offset: 2px; }
+
+  /* ---------- холст ---------- */
+  #viewport {
+    position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
+    background-color: var(--bg);
+    background-image: radial-gradient(circle, var(--grid) 1.1px, transparent 1.2px);
+    background-size: 22px 22px;
+  }
+  #viewport::before {  /* зелёное свечение из угла, как на референсе */
+    content: ""; position: absolute; left: -20vmax; top: -24vmax; width: 60vmax; height: 60vmax;
+    background: radial-gradient(circle, var(--glow), transparent 62%); pointer-events: none;
+  }
+  #viewport.panning { cursor: grabbing; }
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  /* will-change только пока карту двигают: с ним Chrome растягивает готовую картинку,
+     и после зума текст мылится. Остановились — снимаем, и текст перерисуется чётко. */
+  #world.moving { will-change: transform; }
+  #edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+  #edges path { fill: none; stroke: var(--edge); stroke-width: 1.4; transition: opacity .2s, stroke .2s; }
+  #edges path.hot { stroke: var(--accent); }
+  #edges circle { fill: var(--handle); stroke: var(--handle-ring); stroke-width: 1.2; transition: opacity .2s; }
+  #edges .faded { opacity: .15; }
+
+  /* ---------- карточки ---------- */
+  .node { position: absolute; user-select: none; -webkit-user-select: none; transition: opacity .2s; }
+  .node.dim { opacity: .2; }
+  .card {
+    display: flex; flex-direction: column; gap: 8px; padding: 9px; border-radius: 12px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  .card:hover { border-color: var(--border-2); }
+  .hd { display: flex; align-items: center; gap: 9px; min-width: 0; height: 28px; }
+  .ico {
+    flex: none; width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    background: var(--card-in); border: 1px solid var(--border-2); font-size: 14px;
+  }
+  .ico i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
+  .ico svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .ico.tint { color: var(--c); background: color-mix(in srgb, var(--c) 15%, var(--card-in)); border-color: color-mix(in srgb, var(--c) 40%, var(--border-2)); }
+  .ico.plain { color: var(--muted); }
+  .ico.fav { background: #fff; border-color: var(--border-2); overflow: hidden; }
+  .ico.fav img { width: 18px; height: 18px; border-radius: 4px; display: block; }
+  .chip svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; margin-right: 5px; }
+  .ttl { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill {
+    flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 7px;
+    background: var(--card-in); border: 1px solid var(--border); font-size: 11.5px; font-weight: 500; color: var(--text); white-space: nowrap;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dot, var(--accent)); }
+  .pill.off { color: var(--muted); --dot: var(--faint); }
+  .pill.trying { --dot: var(--info); } .pill.adopted { --dot: var(--accent); }
+  .pill.parked { --dot: var(--faint); color: var(--muted); } .pill.rejected { --dot: var(--bad); }
+  .pill.why_missing { --dot: var(--warn); } .pill.suggested { --dot: var(--info); }
+  .in {
+    border-radius: 8px; background: var(--card-in); border: 1px solid var(--border); padding: 7px 10px; min-width: 0;
+  }
+  .in .lb { color: var(--muted); font-size: 11.5px; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .in .v { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+  .in .v::before { content: "•"; color: var(--muted); }
+  .in .v b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .in .v span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .root .ico, #brand .logo.logo { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  #brand .logo svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .leaf .in { padding: 5px 10px; }
+  .node.hit { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+  .node.sel { outline: 1px solid var(--sel); outline-offset: 5px; }
+  .node.sel .h4 { position: absolute; width: 6px; height: 6px; background: var(--sel); border-radius: 1px; }
+  .more { display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; cursor: pointer;
+          border: 1px dashed var(--border-2); color: var(--muted); font-weight: 600; background: var(--card); }
+  /* ---------- движение ---------- */
+  :root { --spring: cubic-bezier(.34, 1.56, .64, 1); --out: cubic-bezier(.22, 1, .36, 1); }
+  .card, .more {
+    transition: transform .22s var(--out), box-shadow .22s var(--out), border-color .2s, background-color .3s, opacity .25s;
+  }
+  .node[role="button"]:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0,0,0,.22), 0 0 0 1px var(--border-2); }
+  :root[data-theme="light"] .node[role="button"]:hover { box-shadow: 0 12px 28px rgba(20,30,24,.14), 0 0 0 1px var(--border-2); }
+  .node[role="button"]:active { transform: scale(.975); transition-duration: .08s; }
+  #world.animating .node { transition: none; }        /* пока летят — положение и прозрачность ведёт аниматор */
+  #world.animating .node[role="button"]:hover { transform: none; }
+  .node.leaving { pointer-events: none; }
+  .pill { transition: color .25s, background-color .25s, border-color .25s; }
+  .pill::before { transition: background-color .25s, box-shadow .25s; }
+  .pill:not(.off)::before { box-shadow: 0 0 0 0 var(--dot, var(--accent)); }
+  .group[aria-expanded="true"] .pill::before { animation: beat .6s var(--out) 1; }
+  @keyframes beat { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+  .node.sel { animation: selIn .28s var(--spring) both; }
+  .node.sel .h4 { animation: handleIn .3s var(--spring) both; }
+  @keyframes selIn { from { outline-offset: 14px; outline-color: transparent; } }
+  @keyframes handleIn { from { transform: scale(0); } }
+  .node.hit { animation: hitPulse 1.2s var(--out) 1; }
+  @keyframes hitPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow); }
+                        100% { box-shadow: 0 0 0 14px transparent, var(--shadow); } }
+  #edges path.hot { transition: stroke .3s; }
+  /* Плавная смена темы: включается на полсекунды при переключении. */
+  :root.theme-anim *, :root.theme-anim *::before { transition: background-color .45s var(--out), border-color .45s var(--out), color .45s var(--out), fill .45s, stroke .45s !important; }
+  /* Появление панелей при загрузке. */
+  #brand { animation: dropIn .5s var(--out) .05s both; }
+  #groupby { animation: dropInCenter .5s var(--out) .12s both; }
+  #tools { animation: riseInCenter .5s var(--out) .18s both; }
+  #zoom { animation: riseIn .5s var(--out) .22s both; }
+  #filters.open { animation: dropIn .28s var(--out) both; }
+  @keyframes dropIn { from { opacity: 0; transform: translateY(-12px); } }
+  @keyframes riseIn { from { opacity: 0; transform: translateY(12px); } }
+  @keyframes dropInCenter { from { opacity: 0; transform: translate(-50%, -12px); } to { transform: translate(-50%, 0); } }
+  @keyframes riseInCenter { from { opacity: 0; transform: translate(-50%, 12px); } to { transform: translate(-50%, 0); } }
+  .btn, .chip, #groupby button { transition: background-color .2s, color .2s, box-shadow .2s, transform .12s var(--out); }
+  .btn:active, .chip:active, #groupby button:active { transform: scale(.94); }
+  .state.show .card { animation: riseIn .35s var(--out) both; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  /* ---------- плавающие панели ---------- */
+  .float {
+    position: fixed; z-index: 5; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+  #brand { left: 16px; top: max(16px, env(safe-area-inset-top)); display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 7px; max-width: calc(100vw - 32px); }
+  #brand .logo { flex: none; width: 34px; height: 34px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--border-2);
+                 display: flex; align-items: center; justify-content: center; font-size: 17px; }
+  #brand .nm { font-weight: 600; white-space: nowrap; }
+  #brand .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .vsep { width: 1px; height: 22px; background: var(--border-2); flex: none; }
+  .search { position: relative; display: flex; align-items: center; }
+  .search input {
+    width: 220px; height: 34px; padding: 0 30px 0 32px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--panel-2); outline: none;
+  }
+  .search input::placeholder { color: var(--faint); }
+  .search input:focus { border-color: var(--sel); }
+  .search svg { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--muted); pointer-events: none; }
+  .search .count { position: absolute; right: 10px; color: var(--accent); font-size: 12px; font-weight: 600; }
+  .btn {
+    flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; min-width: 34px; padding: 0 9px;
+    border-radius: 9px; border: 1px solid transparent; background: none; color: var(--text);
+  }
+  .btn:hover { background: var(--panel-2); }
+  .btn svg { width: 17px; height: 17px; }
+  .btn .n { font-size: 11px; font-weight: 700; background: var(--accent); color: var(--accent-text); border-radius: 6px; padding: 0 5px; }
+  .btn[aria-pressed="true"], .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn[aria-pressed="true"] .n { background: var(--accent-text); color: var(--accent); }
+  #theme .sun { display: none; }
+  :root[data-theme="dark"] #theme .sun { display: block; }
+  :root[data-theme="dark"] #theme .moon { display: none; }
+  #groupby { left: 50%; transform: translateX(-50%); top: max(16px, env(safe-area-inset-top)); display: flex; gap: 2px; padding: 5px; }
+  #groupby button { border: 0; background: none; height: 30px; padding: 0 12px; border-radius: 8px; color: var(--muted); font-weight: 500; white-space: nowrap; }
+  #groupby button[aria-pressed="true"] { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-2); }
+  #groupby button[aria-pressed="true"]::before { content: "●"; color: var(--accent); font-size: 9px; margin-right: 6px; vertical-align: 1px; }
+  #groupby { align-items: center; }
+  #groupby #bys { display: contents; }
+  #groupby .vsep { margin: 0 4px; }
+  #groupby button.mode { color: var(--text); font-weight: 600; }
+  #groupby button.mode[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); box-shadow: none; }
+  #groupby button.mode[aria-pressed="true"]::before { content: none; }
+  .pill.in_brain { --dot: var(--accent); }
+  #filters {
+    left: 16px; top: calc(max(16px, env(safe-area-inset-top)) + 58px); display: none; flex-wrap: wrap; gap: 6px; padding: 8px;
+    max-width: min(560px, calc(100vw - 32px));
+  }
+  #filters.open { display: flex; }
+  .chip { border: 1px solid var(--border); background: var(--panel-2); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+  #tools { left: 50%; transform: translateX(-50%); bottom: max(16px, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 4px; padding: 5px; }
+  #zoom { left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 4px; padding: 5px 8px; }
+  #zoom input[type=range] { width: 96px; accent-color: var(--text); }
+  #zoom .pct { width: 38px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  /* ---------- состояния ---------- */
+  .state { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 4; pointer-events: none; }
+  .state.show { display: flex; }
+  .state .card { cursor: default; max-width: 360px; padding: 12px; pointer-events: auto; }
+  .state .in { color: var(--muted); text-align: left; }
+  .spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--border-2); border-top-color: var(--accent); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- карточка записи ---------- */
+  #panel {
+    position: fixed; z-index: 6; display: flex; flex-direction: column; visibility: hidden;
+    background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
+    transition: transform .25s ease, visibility .25s;
+  }
+  #panel.open { visibility: visible; }
+  @media (min-width: 760px) {
+    #panel { top: max(16px, env(safe-area-inset-top)); right: 16px; bottom: 16px; width: 360px; border-radius: 16px; transform: translateX(calc(100% + 24px)); }
+    #panel.open { transform: none; }
+  }
+  @media (max-width: 759px) {
+    #panel { left: 0; right: 0; bottom: 0; max-height: 74%; border-radius: 18px 18px 0 0; transform: translateY(100%); padding-bottom: env(safe-area-inset-bottom); }
+    #panel.open { transform: none; }
+    #panel .grab { width: 38px; height: 4px; border-radius: 2px; background: var(--border-2); margin: 8px auto 0; flex: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { #panel { transition: none; } }
+  #panel .ph { display: flex; align-items: center; gap: 10px; padding: 14px 14px 12px; }
+  #panel .ph .ico { width: 38px; height: 38px; border-radius: 10px; font-size: 19px; }
+  #panel .ph .ico svg { width: 20px; height: 20px; }
+  #panel .ph .ico.fav img { width: 24px; height: 24px; }
+  #panel .ph h2 { margin: 0; font-size: 16px; line-height: 1.25; word-break: break-word; }
+  #panel .ph .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  #panel .ph .x { margin-left: auto; align-self: flex-start; }
+  #panel.open .ph, #panel.open .pb > * { animation: riseIn .4s var(--out) both; }
+  #panel.open .pb > :nth-child(1) { animation-delay: .06s; } #panel.open .pb > :nth-child(2) { animation-delay: .11s; }
+  #panel.open .pb > :nth-child(3) { animation-delay: .16s; } #panel.open .pb > :nth-child(4) { animation-delay: .21s; }
+  #panel { transition: transform .38s var(--out), visibility .38s; }
+  #panel .pb { overflow-y: auto; padding: 0 14px 16px; display: flex; flex-direction: column; gap: 10px; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+  #panel .why { font-size: 14px; line-height: 1.5; color: var(--text); }
+  #panel .why.none { color: var(--muted); font-style: italic; }
+  .links { display: flex; flex-direction: column; gap: 6px; }
+  .links a {
+    display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 10px; text-decoration: none;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); min-width: 0;
+  }
+  .links a:first-child { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  .links a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .links a svg { flex: none; width: 15px; height: 15px; }
+  .rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+  .row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; font-size: 13px; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row .k { flex: none; width: 96px; color: var(--muted); }
+  .row .val { min-width: 0; word-break: break-word; }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tag { font-size: 12px; padding: 1px 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--border-2); }
+  .note { font-size: 12px; color: var(--muted); }
+  .note code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; white-space: nowrap; }
+
+  /* ---------- сетка: главный вид, когда записей сотни и тысячи ---------- */
+  body.view-grid #viewport, body.view-grid #zoom, body.view-grid #fit { display: none; }
+  body.view-map #grid, body.view-map #gtop { display: none; }
+  #grid {
+    position: fixed; inset: 0; overflow-y: auto; overflow-x: hidden; z-index: 1; -webkit-overflow-scrolling: touch;
+    padding: 0 16px 96px;
+    background-color: var(--bg);
+    background-image: radial-gradient(circle at 0 0, var(--glow), transparent 38vmax);
+    background-attachment: fixed;
+  }
+  @media (min-width: 760px) { body.panel-open #grid { padding-right: 392px; } }
+  #gtop {  /* подложка под плавающими панелями: карточки уходят под неё, а не просвечивают между панелями */
+    position: fixed; left: 0; right: 0; top: 0; height: calc(var(--gtop, 130px) - 10px); z-index: 4; pointer-events: none;
+    background: linear-gradient(var(--bg) 78%, color-mix(in srgb, var(--bg) 0%, transparent));
+  }
+  .gpad { height: var(--gtop, 130px); }  /* место под плавающими панелями (не padding: от него липкие заголовки отсчитывались бы вдвойне) */
+  .gsec { max-width: 1480px; margin: 0 auto 22px; }
+  .ghead {
+    position: sticky; top: calc(var(--gtop, 130px) - 10px); z-index: 2; width: 100%;
+    display: flex; align-items: center; gap: 10px; padding: 8px 4px 10px; border: 0; text-align: left;
+    background: var(--bg); color: var(--text);
+  }
+  .ghead .ttl { flex: 0 1 auto; font-size: 15px; }
+  .ghead .cnt { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+  .ghead .line { flex: 1; height: 1px; background: linear-gradient(90deg, color-mix(in srgb, var(--c) 45%, var(--border)), transparent); }
+  .ghead .chev { flex: none; width: 18px; height: 18px; color: var(--muted); stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .3s var(--out); }
+  .ghead[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+  .ghead:hover .ttl { color: var(--c); }
+  .gcards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(262px, 1fr)); }
+  .gcard {
+    position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 11px 12px 12px; border-radius: 14px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    transition: transform .22s var(--out), box-shadow .22s var(--out), border-color .2s, background-color .3s;
+  }
+  .gcard::before {  /* цветная метка раздела */
+    content: ""; position: absolute; left: 12px; right: 12px; top: -1px; height: 2px; border-radius: 0 0 2px 2px;
+    background: var(--c); opacity: .0; transition: opacity .2s;
+  }
+  .gcard:hover { transform: translateY(-2px); border-color: var(--border-2); box-shadow: 0 14px 34px rgba(0,0,0,.22), 0 0 0 1px var(--border-2); }
+  :root[data-theme="light"] .gcard:hover { box-shadow: 0 12px 28px rgba(20,30,24,.14), 0 0 0 1px var(--border-2); }
+  .gcard:hover::before, .gcard.sel::before { opacity: 1; }
+  .gcard:active { transform: scale(.98); transition-duration: .08s; }
+  .gcard.sel { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel), var(--shadow); }
+  .gcard .hd { height: 30px; }
+  .gcard .ttl { font-size: 14px; }
+  .gwhy {
+    margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; min-height: calc(1.45em * 2);
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  }
+  .gwhy.none { font-style: italic; color: var(--faint); }
+  .gmeta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; min-width: 0; }
+  .gtag {
+    display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 8px; border-radius: 7px;
+    background: var(--card-in); border: 1px solid var(--border); font-size: 11.5px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .gtag svg { flex: none; width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .gtag.c { color: var(--text); border-color: color-mix(in srgb, var(--tc) 40%, var(--border)); background: color-mix(in srgb, var(--tc) 10%, var(--card-in)); }
+  .gtag.c::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tc); flex: none; }
+  .gmore {
+    display: block; margin: 12px auto 0; height: 36px; padding: 0 18px; border-radius: 10px; font-weight: 600;
+    border: 1px dashed var(--border-2); background: var(--card); color: var(--muted);
+    transition: color .2s, border-color .2s, transform .12s var(--out);
+  }
+  .gmore:hover { color: var(--text); border-color: var(--c, var(--accent)); }
+  .gmore:active { transform: scale(.96); }
+  #grid.anim .gcard { animation: cardIn .42s var(--out) both; animation-delay: calc(var(--i, 0) * 22ms); }
+  #grid.anim .ghead { animation: riseIn .4s var(--out) both; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+  .gcard.fresh { animation: cardIn .38s var(--out) both; animation-delay: calc(var(--i, 0) * 18ms); }
+  .gempty { max-width: 420px; margin: 12vh auto 0; }
+  #viewSw { display: flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--panel-2); }
+  #viewSw .btn { height: 30px; min-width: 30px; gap: 5px; font-weight: 600; font-size: 12.5px; color: var(--muted); }
+  #viewSw .btn[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--border-2); }
+  #viewSw .btn svg { width: 16px; height: 16px; }
+  @media (max-width: 759px) {
+    #grid { padding-left: 10px; padding-right: 10px; }
+    .gcards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+    #viewSw .btn span { display: none; }
+  }
+
+  /* ---------- правка из карточки ---------- */
+  .edit { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
+  .edit .lbl { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button {
+    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 8px;
+    border: 1px solid var(--border-2); background: var(--card); color: var(--muted); font-size: 12.5px; font-weight: 500;
+    transition: background-color .2s, color .2s, border-color .2s, transform .12s var(--out);
+  }
+  .seg button::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot, var(--faint)); }
+  .seg button[aria-pressed="true"] { color: var(--text); border-color: var(--dot, var(--accent)); box-shadow: inset 0 0 0 1px var(--dot, var(--accent)); background: color-mix(in srgb, var(--dot, var(--accent)) 10%, var(--card)); }
+  .seg button:active { transform: scale(.95); }
+  .seg .suggested { --dot: var(--info); } .seg .trying { --dot: var(--info); } .seg .adopted { --dot: var(--accent); } .seg .parked { --dot: var(--faint); }
+  .seg .rejected { --dot: var(--bad); } .seg .new { --dot: var(--warn); }
+  .edit textarea, .edit select {
+    width: 100%; border-radius: 9px; border: 1px solid var(--border-2); background: var(--card); color: var(--text);
+    font: inherit; font-size: 13px; padding: 8px 10px; outline: none; transition: border-color .2s, box-shadow .2s;
+  }
+  .edit textarea { resize: vertical; min-height: 64px; line-height: 1.45; }
+  .edit textarea:focus, .edit select:focus { border-color: var(--sel); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sel) 22%, transparent); }
+  .edit select { height: 36px; padding: 0 10px; }
+  .ptags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ptags .chip { cursor: pointer; }
+  .savebar { display: flex; align-items: center; gap: 10px; position: sticky; bottom: -16px; padding: 10px 0 2px; background: var(--panel-2); }
+  .savebar .btn.primary { height: 36px; padding: 0 16px; font-weight: 600; }
+  .savebar .btn.primary:disabled { opacity: .45; cursor: default; }
+  .savebar .msg { font-size: 12.5px; color: var(--muted); }
+  .savebar .msg.ok { color: var(--accent); } .savebar .msg.err { color: var(--bad); }
+  .linkbtn { border: 0; background: none; padding: 0; color: var(--info); font-size: 12.5px; font-weight: 500; text-align: left; }
+  .take { height: 40px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 13.5px; }
+  .take:disabled { opacity: .6; }
+  @keyframes savedPop { 0% { transform: scale(.9); opacity: 0; } 100% { transform: none; opacity: 1; } }
+  .savebar .msg.ok { animation: savedPop .3s var(--spring) both; }
+
+  /* ---------- связи ---------- */
+  .rels { display: flex; flex-direction: column; gap: 6px; }
+  .rel {
+    display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: 10px;
+    background: var(--panel-2); border: 1px solid var(--border); cursor: pointer; text-align: left; color: var(--text);
+    transition: border-color .2s, transform .12s var(--out);
+  }
+  .rel:hover { border-color: var(--border-2); }
+  .rel:active { transform: scale(.985); }
+  .rel .ico { width: 26px; height: 26px; border-radius: 7px; }
+  .rel .ico.fav img { width: 16px; height: 16px; }
+  .rel .body { flex: 1; min-width: 0; }
+  .rel .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel .wy { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rtype { flex: none; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: var(--rc); background: color-mix(in srgb, var(--rc) 14%, transparent); }
+  .rtype.alternative { --rc: var(--info); } .rtype.complements { --rc: var(--accent); }
+  .rtype.replaces { --rc: var(--warn); } .rtype.built_on { --rc: var(--sel); }
+  .rel .rm { flex: none; width: 26px; height: 26px; min-width: 26px; padding: 0; border-radius: 7px; color: var(--muted); }
+  .rel .rm:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+  .relform { display: flex; flex-wrap: wrap; gap: 6px; }
+  .relform input, .relform select {
+    height: 34px; border-radius: 9px; border: 1px solid var(--border-2); background: var(--card); color: var(--text);
+    font: inherit; font-size: 13px; padding: 0 10px; outline: none; min-width: 0;
+  }
+  .relform input { flex: 1 1 180px; } .relform select { flex: 0 1 150px; }
+  .relform input:focus, .relform select:focus { border-color: var(--sel); }
+  .relform .btn { height: 34px; }
+  .sechd { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); margin: 4px 0 -2px; }
+  #edges path.rel { stroke: var(--sel); stroke-dasharray: 5 5; stroke-width: 1.6; animation: relDash 1s linear infinite; }
+  @keyframes relDash { to { stroke-dashoffset: -20; } }
+  .node.relhit { box-shadow: 0 0 0 1px var(--sel), var(--shadow); }
+
+  /* ---------- ноутбук: шапка и группировка по центру не помещаются в одну строку ---------- */
+  @media (min-width: 760px) and (max-width: 1399px) {
+    #groupby { left: 16px; transform: none; top: calc(max(16px, env(safe-area-inset-top)) + 60px);
+               animation: dropIn .5s var(--out) .12s both; }
+    #filters { top: calc(max(16px, env(safe-area-inset-top)) + 108px); }
+  }
+
+  /* ---------- телефон ---------- */
+  @media (max-width: 759px) {
+    #brand { left: 10px; right: 10px; top: max(10px, env(safe-area-inset-top)); flex-wrap: wrap; }
+    #brand .search { order: 5; flex: 1 1 100%; }
+    #brand .search input { width: 100%; }
+    #brand .meta { margin-right: auto; }
+    #brand > div:nth-child(2) { margin-right: auto; }
+    #brand .vsep { display: none; }
+    #groupby { animation: dropIn .5s var(--out) .12s both; }   /* на телефоне панель во всю ширину — без центровки */
+    #groupby { left: 10px; right: 10px; transform: none; top: calc(max(10px, env(safe-area-inset-top)) + 100px); overflow-x: auto; scrollbar-width: none; }
+    #groupby::-webkit-scrollbar { display: none; }
+    #groupby button { flex: 1 0 auto; }
+    #filters { left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 150px); flex-wrap: nowrap; overflow-x: auto; }
+    #zoom { display: none; }
+    #tools { bottom: max(10px, env(safe-area-inset-bottom)); }
+  }
+</style>
+</head>
+<body>
+<div id="viewport" aria-label="Карта">
+  <div id="world"><svg id="edges"></svg><div id="nodes"></div></div>
+</div>
+<main id="grid" aria-label="Записи"></main>
+<div id="gtop" aria-hidden="true"></div>
+<div class="state show" id="state"><div class="spinner"></div></div>
+
+<div class="float" id="brand">
+  <div class="logo" aria-hidden="true" id="logo"></div>
+  <div><div class="nm">Мозг Флоки</div><div class="meta" id="meta">загрузка…</div></div>
+  <div class="vsep"></div>
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Поиск по смыслу" autocomplete="off" aria-label="Поиск">
+    <span class="count" id="qcount"></span>
+  </div>
+  <button class="btn" id="filterBtn" aria-pressed="false" aria-controls="filters" title="Фильтр по типам и статусам">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></svg>
+    <span class="n" id="filterN" hidden></span>
+  </button>
+</div>
+<div class="float" id="groupby" role="group" aria-label="Режим и группировка">
+  <button data-mode="brain" class="mode">Мозг</button>
+  <button data-mode="catalog" class="mode">Каталог</button>
+  <div class="vsep"></div>
+  <span id="bys"></span>
+</div>
+<div class="float" id="filters"></div>
+
+<div class="float" id="zoom">
+  <button class="btn" id="zout" aria-label="Отдалить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg></button>
+  <input type="range" id="zrange" min="15" max="250" value="100" aria-label="Масштаб">
+  <button class="btn" id="zin" aria-label="Приблизить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+  <span class="pct" id="zpct">100%</span>
+</div>
+<div class="float" id="tools">
+  <div id="viewSw" role="group" aria-label="Вид">
+    <button class="btn" data-view="grid" title="Сетка карточек"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Сетка</span></button>
+    <button class="btn" data-view="map" title="Карта-mindmap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.5 12H12m0 0V7a2 2 0 0 1 2-2h2.5M12 12v5a2 2 0 0 0 2 2h2.5"/></svg><span>Карта</span></button>
+  </div>
+  <div class="vsep"></div>
+  <button class="btn primary" id="fit" title="Показать всё" aria-label="Показать всё"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  <button class="btn" id="toggleAll" title="Раскрыть или свернуть все разделы" aria-label="Раскрыть или свернуть все разделы"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M8 12h12M12 18h8M4 12h.01M4 18h.01M8 18h.01"/></svg></button>
+  <div class="vsep"></div>
+  <button class="btn" id="refresh" title="Обновить" aria-label="Обновить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+  <button class="btn" id="theme" title="Светлая / тёмная тема" aria-label="Переключить светлую и тёмную тему">
+    <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/></svg>
+    <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  </button>
+</div>
+<aside id="panel" aria-live="polite"></aside>
+
+<script>
+(() => {
+  "use strict";
+  // ---------------------------------------------------------------- окружение
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const inTelegram = !!(tg && tg.initData);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+    del(k) { try { localStorage.removeItem(k); } catch (_) {} },
+  };
+  function $(id) { return document.getElementById(id); }
+  const SOURCE = (document.querySelector('meta[name="brain-source"]') || {}).content || "api";
+  // Ключ из ссылки запоминаем и убираем из адресной строки: закладка откроется, а ключ не светится.
+  // Для бота ключ в ?k=, для GitHub Pages — в #k= (часть после # на сервер не уходит;
+  // Telegram дописывает свои параметры в тот же # через &, поэтому разбираем как параметры).
+  const params = new URLSearchParams(location.search);
+  const hashParams = new URLSearchParams(location.hash.slice(1));
+  if (SOURCE === "api" && params.get("k")) {
+    store.set("brainKey", params.get("k"));
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
+  // Облачное хранилище Telegram (у бота своё, видно только владельцу): ключ карты переживает
+  // очистку кеша Telegram и открывается на другом устройстве без новой ссылки.
+  const cloud = (() => {
+    try { return tg && tg.initData && tg.CloudStorage && tg.isVersionAtLeast("6.9") ? tg.CloudStorage : null; } catch (_) { return null; }
+  })();
+  const cloudKey = {
+    get(k) {
+      return new Promise((done) => {
+        if (!cloud) return done(null);
+        const t = setTimeout(() => done(null), 2000);
+        try { cloud.getItem(k, (err, v) => { clearTimeout(t); done(err ? null : v || null); }); } catch (_) { clearTimeout(t); done(null); }
+      });
+    },
+    set(k, v) { try { if (cloud) cloud.setItem(k, v); } catch (_) {} },
+    del(k) { try { if (cloud) cloud.removeItem(k); } catch (_) {} },
+  };
+  if (SOURCE === "enc" && hashParams.get("k")) {
+    store.set("brainPagesKey", hashParams.get("k"));
+    cloudKey.set("brainPagesKey", hashParams.get("k"));
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  // Тема: выбор владельца (кнопка) → тема Telegram → системная.
+  const root = document.documentElement;
+  const systemTheme = () => inTelegram ? (tg.colorScheme === "light" ? "light" : "dark")
+    : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  function setTheme(t) {
+    root.dataset.theme = t;
+    if (inTelegram) {
+      try { const bg = getComputedStyle(root).getPropertyValue("--bg").trim(); tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } catch (_) {}
+    }
+  }
+  setTheme(store.get("brainTheme") || systemTheme());
+  const followSystem = () => { if (!store.get("brainTheme")) setTheme(systemTheme()); };
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", followSystem);
+  let themeT = null;
+  $("theme").addEventListener("click", () => {
+    const t = root.dataset.theme === "light" ? "dark" : "light";
+    root.classList.add("theme-anim");
+    clearTimeout(themeT);
+    themeT = setTimeout(() => root.classList.remove("theme-anim"), 520);
+    store.set("brainTheme", t); setTheme(t);
+  });
+
+  if (inTelegram) {
+    tg.ready(); tg.expand();
+    if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();  // иначе свайп по карте закрывает мини-апп
+    tg.onEvent("themeChanged", followSystem);
+  }
+
+  // ---------------------------------------------------------------- константы
+  const PALETTE = ["#3ddc68", "#7b6cff", "#5aa9ff", "#ff8a4c", "#ff5da2", "#22d3c5",
+                   "#f2b84b", "#b07cff", "#ff5d5d", "#9be15d", "#e0915a", "#6f86ff"];
+  const ROOT_W = 230, ROOT_H = 102, GROUP_H = 102, LEAF_W = 256, LEAF_H = 84, LEAF_GAP = 12, GROUP_GAP = 26;
+  const X_ROOT = 84, X_GROUP = 64, LEAF_CAP = 12, SEARCH_CAP = 30;
+  const STATUS = { in_brain: "в мозге", trying: "пробую", adopted: "внедрено", parked: "отложено", rejected: "отклонено", why_missing: "без описания", suggested: "от Claude" };
+  const GROUPINGS = {
+    brain: { category: "Направления", kind: "Типы", project: "Проекты", maker: "Компании" },
+    catalog: { category: "Направления", kind: "Типы", maker: "Компании", month: "По месяцам", site: "По типу ссылки" },
+  };
+  const MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+
+  // ---------------------------------------------------------------- состояние
+  let data = null;
+  // Мозг — отобранное с разбором; Каталог — архив канала (тысячи записей), грузится по требованию.
+  let mode = store.get("brainMode") === "catalog" ? "catalog" : "brain";
+  const byOf = {
+    brain: GROUPINGS.brain[store.get("brainBy")] ? store.get("brainBy") : "category",
+    catalog: GROUPINGS.catalog[store.get("brainByCatalog2")] ? store.get("brainByCatalog2") : "category",
+  };
+  let by = byOf[mode];
+  // Вид: сетка карточек (по умолчанию — когда записей сотни) или карта-mindmap (обзор веток).
+  let viewMode = store.get("brainView") === "map" ? "map" : "grid";
+  const statusFilter = new Set();  // пусто = любой статус
+  let catalog = null;        // {generated_at, entries} — загружается при первом переходе в Каталог
+  let catalogItems = [];     // записи каталога в форме карточек
+  const expanded = {};          // by → Set(groupKey)
+  const showAll = new Set();    // группы, где раскрыт хвост «ещё N»
+  const kindFilter = new Set(); // пусто = все типы
+  let showRejected = false;
+  let query = "";
+  let layout = { nodes: [], edges: [], bounds: null, groups: [], entries: [] };
+  let selected = null;
+  let hits = [];
+  let hitIdx = -1;
+  const view = { x: 0, y: 0, s: 1 };
+  let firstFit = true;
+
+  const viewport = $("viewport"), world = $("world"), edgesEl = $("edges"), nodesEl = $("nodes");
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : null;
+  function plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+  }
+  const records = (n) => n + " " + plural(n, "запись", "записи", "записей");
+  const branches = (n) => n + " " + plural(n, "ветка", "ветки", "веток");
+
+  // Ширину подписи меряем в DOM тем же шрифтом, что и карточку: canvas расходится с рендером.
+  const measurer = el("span");
+  measurer.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:0;font-weight:600;font-size:13px";
+  document.body.appendChild(measurer);
+  const widths = new Map();
+  function textW(s) {
+    if (!widths.has(s)) { measurer.textContent = s; widths.set(s, measurer.getBoundingClientRect().width); }
+    return widths.get(s);
+  }
+
+  // ---------------------------------------------------------------- загрузка
+  function showState(content) {
+    const s = $("state");
+    s.replaceChildren();
+    if (content === "loading") s.appendChild(el("div", "spinner"));
+    else if (content) s.appendChild(content);
+    s.classList.toggle("show", !!content);
+  }
+  function stateCard(title, text) {
+    const c = el("div", "card");
+    const hd = el("div", "hd");
+    hd.append(icoSvg("brain"), el("div", "ttl", title));
+    c.append(hd, el("div", "in", text));
+    return c;
+  }
+
+  function b64(str) {
+    const s = str.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(s + "=".repeat((4 - s.length % 4) % 4));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  }
+  // Снимок с GitHub Pages: расшифровываем прямо в браузере, ключ на сервер не уходит.
+  async function fetchEncrypted(file = "brain.enc") {
+    let k = store.get("brainPagesKey");
+    if (!k) {
+      k = await cloudKey.get("brainPagesKey");
+      if (k) store.set("brainPagesKey", k);
+    }
+    if (!k) return { error: stateCard("Нужна ссылка с ключом", "Открой карту по ссылке из бота: /brain map.") };
+    const r = await fetch(file + "?t=" + Date.now(), { cache: "no-store" });
+    if (r.status === 404 && file !== "brain.enc") return { data: { entries: [] } };
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const blob = await r.json();
+    let plain;
+    try {
+      const key = await crypto.subtle.importKey("raw", b64(k), "AES-GCM", false, ["decrypt"]);
+      plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(blob.iv) }, key, b64(blob.ct));
+    } catch (_) {
+      store.del("brainPagesKey");
+      cloudKey.del("brainPagesKey");
+      return { error: stateCard("Ключ не подходит", "Ключ сменили (/brain map reset) или ссылка неполная. Возьми свежую: /brain map.") };
+    }
+    // Ключ подошёл; дальше ошибка — не повод забывать ключ (например, страница из кеша старше снимка).
+    try {
+      if (blob.z === "gzip") {
+        // Снимки сжаты до шифрования (каталог — мегабайты текста). Распаковывает сам браузер.
+        if (typeof DecompressionStream === "undefined") {
+          return { error: stateCard("Старый браузер", "Не умеет распаковывать снимок. Обнови Telegram или браузер.") };
+        }
+        const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+        return { data: JSON.parse(text) };
+      }
+      return { data: JSON.parse(new TextDecoder().decode(plain)) };
+    } catch (_) {
+      return { error: stateCard("Снимок не читается", "Похоже, страница устарела. Закрой и открой карту заново.") };
+    }
+  }
+  async function fetchApi(path = "/api/brain") {
+    const headers = {};
+    if (inTelegram) headers["X-Init-Data"] = tg.initData;
+    const key = store.get("brainKey");
+    if (key) headers["X-Brain-Key"] = key;
+    if (!inTelegram && !key) return { error: stateCard("Нужна ссылка с ключом", "Открой карту по ссылке из бота: /brain map.") };
+    const r = await fetch(path, { headers, cache: "no-store" });
+    if (r.status === 403) {
+      store.del("brainKey");
+      return { error: stateCard("Нет доступа", "Ключ устарел или не подошёл. Возьми свежую ссылку: /brain map.") };
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return { data: await r.json() };
+  }
+
+  // ---------------------------------------------------------------- правка: бот на ПК
+  // На ПК карта говорит с ботом напрямую. С GitHub Pages — по адресу и ключу из зашифрованного
+  // снимка (api): бот запущен — правки уходят ему и сразу видны, выключен — карта только читается.
+  let api = null, live = false;
+  function setupApi() {
+    if (SOURCE === "api") api = { url: "", key: store.get("brainKey") || "" };
+    else api = data && data.api && /^https:\/\//.test(data.api.url || "") ? data.api : null;
+  }
+  async function apiCall(path, body, timeoutMs = 10000) {
+    const headers = {};
+    if (inTelegram) headers["X-Init-Data"] = tg.initData;
+    if (api.key) headers["X-Brain-Key"] = api.key;
+    if (body) headers["Content-Type"] = "application/json";
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const r = await fetch(api.url + path, { method: body ? "POST" : "GET", headers, cache: "no-store", signal: ctl.signal,
+                                              body: body ? JSON.stringify(body) : undefined });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return { error: j.error === "unauthorized" ? "Бот не узнал ключ — возьми свежую ссылку: /brain map." : (j.error || "Ошибка " + r.status) };
+      return j;
+    } catch (_) {
+      return { error: await whyOffline(), offline: true };
+    } finally { clearTimeout(t); }
+  }
+  // Карта прямо с бота: там правка идёт без запросов на чужой сайт, их браузер не блокирует.
+  function directLink() {
+    if (SOURCE !== "enc" || !api || !api.url) return null;
+    const a = el("a", "linkbtn", "Открыть карту с ПК →");
+    a.href = `${api.url}/brain?k=${encodeURIComponent(api.key || "")}`;
+    a.rel = "noopener noreferrer";
+    if (inTelegram) a.onclick = (ev) => { ev.preventDefault(); location.href = a.href; };
+    return a;
+  }
+  // Запрос не прошёл — выясняем почему: бот выключен или браузер не пустил запрос к ПК.
+  async function whyOffline() {
+    let host = "";
+    try { host = new URL(api.url || location.href).host; } catch (_) {}
+    try {
+      const ctl = new AbortController(); setTimeout(() => ctl.abort(), 4000);
+      const r = await fetch(api.url + "/api/brain/ping", { cache: "no-store", signal: ctl.signal });
+      if (r.ok) {
+        return "Бот на связи, но браузер не пустил запрос к ПК (защита локальной сети). "
+             + "Разреши сайту доступ к устройствам в локальной сети, если браузер спросит, или открой карту кнопкой «Мозг» в Telegram.";
+      }
+      return `Бот ответил ошибкой ${r.status} (${host}). Перезапусти бота.`;
+    } catch (_) {
+      return `Не достучался до бота (${host}): он выключен, или браузер не пускает запросы к ПК через Tailscale.`;
+    }
+  }
+  // С Pages: снимок уже на экране, а бот, если запущен, отдаст свежее (со всеми правками).
+  async function liveRefresh() {
+    if (SOURCE !== "enc" || !api) return;
+    const res = await apiCall("/api/brain", null, 6000);
+    if (res.error || !Array.isArray(res.entries)) { live = false; return; }
+    res.api = data.api;
+    data = res; live = true;
+    buildRels();
+    setupSearch(data.search); searchIdx = null;
+    buildFilters(); render({ quiet: true });
+    warmSearch(data.entries);
+  }
+
+  async function load(silent) {
+    if (!silent) showState("loading");
+    let res;
+    try {
+      res = SOURCE === "enc" ? await fetchEncrypted() : await fetchApi();
+    } catch (e) {
+      if (!silent || !data) showState(SOURCE === "enc"
+        ? stateCard("Снимок не загрузился", "Проверь интернет и нажми «Обновить».")
+        : stateCard("Бот не отвечает", "Карта живёт на ПК с ботом. Проверь, что он запущен, и нажми «Обновить»."));
+      return;
+    }
+    if (res.error) { showState(res.error); return; }
+    data = res.data;
+    buildRels();
+    setupSearch(data.search);
+    searchIdx = null;
+    if (mode === "catalog") await loadCatalog(true);
+    showState(null);
+    buildFilters();
+    render({ quiet: silent });
+    lastLoad = Date.now();
+    live = SOURCE === "api";
+    setupApi();
+    warmSearch(data.entries);
+    if (!silent || !iconsLoaded) loadIcons();
+    liveRefresh();
+  }
+
+  function toCard(c) {
+    return { id: c.id, name: c.name, url: c.url, links: c.links || [c.url], why: c.text || "", kind: c.kind || null,
+             maker: c.maker || "", category: c.category || null,
+             status: c.brain_id ? "in_brain" : "", posted_at: c.posted_at || "", post_url: c.post_url || "",
+             source: c.source || "", brain_id: c.brain_id || null, projects: [], catalog: true, ik: c.ik || "" };
+  }
+  // Иконки — отдельным файлом после мозга: карта показывается сразу, картинки подтягиваются следом.
+  let icons = {};
+  let iconsLoading = null;
+  let iconsLoaded = false, lastLoad = 0;
+  // Иконки пришли — подставляем в уже нарисованные карточки, не перерисовывая сетку.
+  function applyIcons() {
+    if (viewMode !== "grid") { render({ quiet: true }); return; }
+    gridEl.querySelectorAll(".gcard[data-ik]").forEach((c) => {
+      const old = c.querySelector(".hd .ico");
+      if (!old || old.classList.contains("fav") || !icons[c.dataset.ik]) return;
+      old.replaceWith(entryIcon({ ik: c.dataset.ik, url: c.dataset.url || "", kind: c.dataset.kind || null, catalog: c.dataset.cat === "1" }));
+    });
+  }
+  // Индекс поиска считаем заранее, маленькими порциями в паузах: первый поиск по каталогу
+  // иначе на телефоне замирает на секунду.
+  function warmSearch(src) {
+    let i = 0;
+    const step = () => {
+      const end = performance.now() + 16;
+      while (i < src.length && performance.now() < end) tfOf(src[i++]);
+      if (i < src.length) setTimeout(step, 24);
+    };
+    setTimeout(step, 500);
+  }
+  function loadIcons() {
+    if (iconsLoading) return iconsLoading;
+    iconsLoading = (async () => {
+      try {
+        const res = SOURCE === "enc" ? await fetchEncrypted("icons.enc") : await fetchApi("/api/icons");
+        if (res.error || !res.data || !res.data.icons) return;
+        icons = res.data.icons;
+        iconsLoaded = true;
+        applyIcons();
+      } catch (_) { /* без иконок карта тоже работает */ }
+      finally { iconsLoading = null; }
+    })();
+    return iconsLoading;
+  }
+  async function loadCatalog(silent) {
+    if (catalog && silent) return true;
+    if (!silent) showState("loading");
+    try {
+      const res = SOURCE === "enc" ? await fetchEncrypted("catalog.enc") : await fetchApi("/api/catalog");
+      if (res.error) { showState(res.error); return false; }
+      catalog = res.data;
+      catalogItems = (catalog.entries || []).map(toCard);
+      warmSearch(catalogItems);
+      searchIdx = null;
+      return true;
+    } catch (e) {
+      showState(stateCard("Каталог не загрузился", "Проверь связь и нажми «Обновить»."));
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------- группировка
+  function visibleEntries() {
+    if (mode === "catalog") return catalogItems;
+    return data.entries.filter((e) =>
+      (showRejected || e.status !== "rejected") && (!kindFilter.size || kindFilter.has(e.kind || ""))
+      && (!statusFilter.size || statusFilter.has(e.status)));
+  }
+
+  function groupsFor(entries) {
+    const cats = Object.fromEntries(data.categories.map((c) => [c.slug, c.title]));
+    const projs = Object.fromEntries(data.projects.map((p) => [p.slug, p.title]));
+    const map = new Map();
+    const put = (key, title, e, extra) => {
+      if (!map.has(key)) map.set(key, Object.assign({ key, title, items: [], last: false }, extra));
+      map.get(key).items.push(e);
+    };
+    for (const e of entries) {
+      if (by === "month") {
+        const m = (e.posted_at || "").slice(0, 7);
+        m ? put(m, MONTHS[+m.slice(5, 7) - 1] + " " + m.slice(0, 4), e) : put("_none", "Без даты", e, { last: true });
+        continue;
+      }
+      if (by === "site") {
+        const [key, title] = linkType(e.url);
+        put(key, title, e, key === "web" ? { last: true } : {});
+        continue;
+      }
+      if (by === "category") {
+        e.category ? put(e.category, cats[e.category] || e.category, e) : put("_none", "Без направления", e, { last: true });
+      } else if (by === "kind") {
+        const k = data.kinds[e.kind];
+        k ? put(e.kind, k.title[0].toUpperCase() + k.title.slice(1), e)
+          : put("_none", "Тип не определён", e, { last: true });
+      } else if (by === "project") {
+        if (!e.projects.length) put("_none", "Без проекта", e, { last: true });
+        for (const p of e.projects) put(p, projs[p] || p, e);
+      } else {
+        const m = (e.maker || (e.kind === "company" ? e.name : "")).trim();
+        m ? put(m.toLowerCase(), m, e) : put("_none", "Кто делает — неизвестно", e, { last: true });
+      }
+    }
+    let groups = [...map.values()];
+    // Совсем длинный хвост одиночек сворачиваем в одну ветку. Порог высокий: у «Компаний»
+    // почти все по одной записи, и «Разные» проглотили бы весь вид.
+    const singles = groups.filter((g) => g.items.length === 1 && !g.last);
+    if (groups.length > 40 && singles.length > 2) {
+      groups = groups.filter((g) => !singles.includes(g));
+      groups.push({ key: "_misc", title: "Разные", items: singles.map((g) => g.items[0]), last: true });
+    }
+    if (by === "month") groups.sort((a, b) => (a.last - b.last) || (a.key < b.key ? 1 : -1));  // свежие месяцы первыми
+    if (mode === "catalog") groups.forEach((g) => g.items.sort((a, b) => (a.posted_at < b.posted_at ? 1 : -1)));
+    if (by !== "month" && by !== "site") {
+      groups.sort((a, b) => (a.last - b.last) || (b.items.length - a.items.length) || a.title.localeCompare(b.title, "ru"));
+    }
+    groups.forEach((g, i) => { g.color = PALETTE[i % PALETTE.length]; });
+    return groups;
+  }
+
+  // Каталог по типу ссылки: у почти каждого инструмента свой домен, поэтому группируем по площадке.
+  const LINK_TYPES = [
+    [/^github\.com$/, "github", "GitHub-репозитории"], [/(^|\.)huggingface\.co$/, "hf", "Hugging Face"],
+    [/^(t\.me|telegram\.me)$/, "tg", "Telegram-боты и Mini Apps"],
+    [/^(chromewebstore\.google\.com|chrome\.google\.com|addons\.mozilla\.org|marketplace\.visualstudio\.com)$/, "ext", "Расширения"],
+    [/^(npmjs\.com|pypi\.org|crates\.io|pkg\.go\.dev)$/, "pkg", "Пакеты npm / PyPI"],
+    [/^(apps\.apple\.com|play\.google\.com)$/, "app", "Мобильные приложения"],
+    [/(^|\.)(youtube\.com|youtu\.be)$/, "video", "Видео"],
+    [/^(medium\.com|habr\.com|substack\.com|dev\.to)$|\.substack\.com$/, "read", "Статьи"],
+    [/^(gitlab\.com|bitbucket\.org|codeberg\.org)$/, "git", "Другие git-хостинги"],
+  ];
+  function linkType(u) {
+    const h = hostOf(u);
+    const hit = LINK_TYPES.find(([re]) => re.test(h));
+    return hit ? [hit[1], hit[2]] : ["web", "Сайты и сервисы"];
+  }
+  function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_) { return ""; } }
+  function fmtDay(iso) {  // внутри ветки месяца год и месяц уже в заголовке
+    return iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) : "";
+  }
+  function fmtDate(iso, long) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString("ru-RU", long ? { day: "numeric", month: "long", year: "numeric" } : { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  // ---------------------------------------------------------------- поиск по смыслу
+  // Те же правила, что у бота (brain_search.py): основы слов, синонимы RU/EN из снимка, BM25.
+  // «парсинг сайтов» находит scraper, «озвучка» — tts. Порядок — по близости к запросу.
+  const RU_END = /(ами|ями|ого|его|ому|ему|ыми|ими|ов|ев|ей|ой|ый|ий|ая|яя|ое|ее|ые|ие|ую|юю|ом|ем|ах|ях|ам|ям|ы|и|а|я|о|е|у|ю|ь)$/;
+  const EN_END = /(ing|ers|er|ed|es|s)$/;
+  function stem(w) {
+    w = w.toLowerCase().replace(/ё/g, "е");
+    if (/[а-я]/.test(w)) { const c = w.replace(RU_END, ""); return (c.length >= 3 ? c : w).slice(0, 5); }
+    const c = w.replace(EN_END, ""); return (c.length >= 3 ? c : w).slice(0, 6);
+  }
+  let STOP = new Set(), SYN = new Map();
+  function setupSearch(cfg) {
+    STOP = new Set((cfg && cfg.stop) || []);
+    SYN = new Map();
+    for (const group of (cfg && cfg.synonyms) || []) {
+      const stems = new Set();
+      for (const phrase of group) for (const w of phrase.toLowerCase().split(/\s+/)) if (w.length >= 2) stems.add(stem(w));
+      for (const st of stems) { if (!SYN.has(st)) SYN.set(st, new Set()); stems.forEach((x) => SYN.get(st).add(x)); }
+    }
+  }
+  function words(text) {
+    const out = [];
+    for (const w of (text || "").toLowerCase().match(/[a-zа-яё0-9]+/g) || []) {
+      if (w.length < 2 || /^\d+$/.test(w) || STOP.has(w)) continue;
+      out.push(stem(w));
+    }
+    return out;
+  }
+  const hostWords = (urls) => (urls || []).map((u) => u.replace(/^https?:\/\/(www\.)?/, "").replace(/[/.]/g, " ")).join(" ");
+  const tfCache = new WeakMap();
+  function tfOf(e) {
+    let d = tfCache.get(e);
+    if (d) return d;
+    const tf = new Map();
+    for (const st of words(e.name)) tf.set(st, (tf.get(st) || 0) + 3);
+    const k = data.kinds[e.kind];
+    for (const st of words([e.why, e.verdict, e.maker, e.category, k && k.title, hostWords(e.links || [e.url])].join(" "))) tf.set(st, (tf.get(st) || 0) + 1);
+    let len = 0; tf.forEach((v) => { len += v; });
+    d = { tf, len: len || 1 };
+    tfCache.set(e, d);
+    return d;
+  }
+  let searchIdx = null;  // {src, post: основа → записи, keys, avg}
+  function searchIndex(src) {
+    if (searchIdx && searchIdx.src === src) return searchIdx;
+    const post = new Map(); let total = 0;
+    for (const e of src) {
+      const d = tfOf(e); total += d.len;
+      d.tf.forEach((_, k) => { let a = post.get(k); if (!a) post.set(k, a = []); a.push(e); });
+    }
+    searchIdx = { src, post, keys: [...post.keys()], avg: total / Math.max(1, src.length) };
+    return searchIdx;
+  }
+  function searchScores(qRaw) {
+    const q = qRaw.trim().toLowerCase();
+    const scores = new Map();
+    if (!q) return scores;
+    const src = mode === "catalog" ? catalogItems : data.entries;
+    const idx = searchIndex(src);
+    const terms = [...new Set(words(q))];
+    // Для каждого слова запроса — основы из индекса, которые ему подходят: само слово,
+    // его продолжения (pars → parser) и синонимы (вес поменьше).
+    const alts = terms.map((t) => {
+      const m = new Map();
+      const add = (x, w) => {
+        if (idx.post.has(x) && !m.has(x)) m.set(x, w);
+        if (x.length >= 3) for (const v of idx.keys) if (v !== x && v.startsWith(x) && !m.has(v)) m.set(v, w);
+      };
+      add(t, 1);
+      (SYN.get(t) || []).forEach((x) => add(x, 0.7));
+      return m;
+    });
+    const n = src.length;
+    // Считаем только записи, где есть хоть одно подходящее слово, — а не все тысячи.
+    const cand = new Set();
+    for (const m of alts) m.forEach((_, v) => idx.post.get(v).forEach((e) => cand.add(e)));
+    const idf = new Map();
+    for (const m of alts) m.forEach((_, v) => { const df = idx.post.get(v).length; idf.set(v, Math.log(1 + (n - df + 0.5) / (df + 0.5))); });
+    let top = 0;
+    const put = (e, total) => { if (total) { scores.set(e, total); top = Math.max(top, total); } };
+    for (const e of cand) {
+      const { tf, len } = tfOf(e);
+      const norm = 1.2 * (0.25 + 0.75 * len / idx.avg);
+      let total = 0, covered = 0;
+      for (const m of alts) {
+        let best = 0;
+        m.forEach((w, v) => {
+          const f = tf.get(v);
+          if (f) best = Math.max(best, w * idf.get(v) * f * 2.2 / (f + norm));
+        });
+        if (best) { total += best; covered++; }
+      }
+      if (terms.length && total) total *= (0.3 + 0.7 * covered / terms.length) ** 2;
+      put(e, total);
+    }
+    // Номер записи, адрес или кусок имени — точное попадание, всегда наверху.
+    if (q.length >= 3 || /^[bc]-\d/.test(q)) {
+      for (const e of src) {
+        if ((e.id || "").toLowerCase() === q || (q.length >= 3 && ((e.url || "").toLowerCase().includes(q) || (e.name || "").toLowerCase().includes(q)))) {
+          put(e, (scores.get(e) || 0) + 100);
+        }
+      }
+    }
+    // Хвост из случайных совпадений одного синонима не показываем: только близкие к лучшему.
+    scores.forEach((v, e) => { if (v < top * 0.25) scores.delete(e); });
+    return scores;
+  }
+  let scores = new Map();
+  function matches(e, q) {
+    return !q || scores.has(e);
+  }
+
+  // ---------------------------------------------------------------- раскладка
+  // Дерево в одну сторону (сверху вниз): на узком экране и в каталоге — там месяцы идут лентой,
+  // от свежих к старым, и начинать смотреть надо сверху.
+  function oneSided() {
+    return mode === "catalog" || viewport.clientWidth / Math.max(1, viewport.clientHeight) < 0.85;
+  }
+
+  function computeLayout() {
+    const entries = visibleEntries();
+    const groups = groupsFor(entries);
+    const q = query.trim().toLowerCase();
+    scores = searchScores(q);
+    if (!expanded[by]) {
+      // Мало записей — всё раскрыто сразу; много — ветки свернуты, раскрываются тапом.
+      expanded[by] = new Set(entries.length <= 30 ? groups.map((g) => g.key) : []);
+    }
+    const open = (g) => expanded[by].has(g.key) || (q && g.items.some((e) => matches(e, q)));
+    const narrow = oneSided();
+
+    const nodes = [{ id: "root", type: "root", x: -ROOT_W / 2, y: -ROOT_H / 2, w: ROOT_W, h: ROOT_H, count: entries.length, groups: groups.length }];
+    const edges = [];
+
+    const blocks = groups.map((g) => {
+      const isOpen = open(g);
+      const pool = q ? g.items.filter((e) => matches(e, q)).sort((a, b) => scores.get(b) - scores.get(a)) : g.items;
+      const cap = showAll.has(by + ":" + g.key) ? pool.length : q ? SEARCH_CAP : LEAF_CAP;
+      const shown = isOpen ? pool.slice(0, cap) : [];
+      const more = isOpen && pool.length > shown.length ? pool.length - shown.length : 0;
+      const rows = shown.length + (more ? 1 : 0);
+      const leavesH = rows ? rows * LEAF_H + (rows - 1) * LEAF_GAP : 0;
+      const w = Math.min(330, Math.max(220, Math.ceil(textW(g.title)) + 182));
+      return { g, isOpen, shown, more, w, h: Math.max(GROUP_H, leavesH), leavesH };
+    });
+
+    // Широкий экран — ветки по обе стороны; узкий (телефон) — все вправо, дерево растёт вниз.
+    const sides = { left: [], right: [] }, sum = { left: 0, right: 0 };
+    for (const b of blocks) {
+      const side = narrow || sum.right <= sum.left ? "right" : "left";
+      sides[side].push(b); sum[side] += b.h + GROUP_GAP;
+    }
+    for (const side of ["left", "right"]) {
+      const dir = side === "right" ? 1 : -1;
+      let y = -(sum[side] - GROUP_GAP) / 2;
+      for (const b of sides[side]) {
+        const cy = y + b.h / 2;
+        const gx = dir > 0 ? ROOT_W / 2 + X_ROOT : -(ROOT_W / 2 + X_ROOT) - b.w;
+        const gid = "g:" + b.g.key;
+        nodes.push({ id: gid, type: "group", side, x: gx, y: cy - GROUP_H / 2, w: b.w, h: GROUP_H, group: b.g, color: b.g.color, open: !!b.isOpen });
+        edges.push({ a: "root", b: gid, dir, gid });
+        const lx = dir > 0 ? gx + b.w + X_GROUP : gx - X_GROUP - LEAF_W;
+        let ly = cy - b.leavesH / 2;
+        for (const e of b.shown) {
+          const id = "l:" + b.g.key + ":" + e.id;
+          nodes.push({ id, type: "leaf", x: lx, y: ly, w: LEAF_W, h: LEAF_H, entry: e, color: b.g.color, group: b.g, side });
+          edges.push({ a: gid, b: id, dir, gid, lid: id });
+          ly += LEAF_H + LEAF_GAP;
+        }
+        if (b.more) {
+          const id = "m:" + b.g.key;
+          nodes.push({ id, type: "more", x: lx, y: ly, w: LEAF_W, h: LEAF_H, group: b.g, more: b.more });
+          edges.push({ a: gid, b: id, dir, gid });
+        }
+        y += b.h + GROUP_GAP;
+      }
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+    }
+    return { nodes, edges, groups, entries, bounds: { minX, minY, maxX, maxY } };
+  }
+
+  // Коленчатая связь со скруглёнными углами — как на референсе.
+  function elbow(x1, y1, x2, y2) {
+    const mx = Math.round((x1 + x2) / 2), dy = y2 - y1;
+    if (Math.abs(dy) < 1) return `M${x1},${y1} H${x2}`;
+    const r = Math.min(12, Math.abs(dy) / 2, Math.abs(mx - x1));
+    const sx = Math.sign(x2 - x1) || 1, sy = Math.sign(dy);
+    return `M${x1},${y1} H${mx - sx * r} Q${mx},${y1} ${mx},${y1 + sy * r} V${y2 - sy * r} Q${mx},${y2} ${mx + sx * r},${y2} H${x2}`;
+  }
+
+  // ---------------------------------------------------------------- отрисовка
+  function cardHead(icon, title, pillText, pillCls) {
+    const hd = el("div", "hd");
+    hd.append(icon, el("div", "ttl", title));
+    if (pillText) hd.appendChild(el("span", "pill" + (pillCls ? " " + pillCls : ""), pillText));
+    return hd;
+  }
+  function inner(label, value, unit) {
+    const box = el("div", "in");
+    if (label) box.appendChild(el("div", "lb", label));
+    const v = el("div", "v");
+    v.appendChild(el("b", null, value));
+    if (unit) v.appendChild(el("span", null, unit));
+    box.appendChild(v);
+    return box;
+  }
+  // Линейные иконки 24×24 в одном стиле (частью по мотивам Lucide, ISC). Строки — константы
+  // кода, не данные, поэтому их можно вставлять разметкой.
+  const ICONS = {
+    brain: '<path d="M12 5a3 3 0 0 0-5.9-.8A3 3 0 0 0 4 9a3 3 0 0 0 .5 5.5A3.5 3.5 0 0 0 9 19.8 3 3 0 0 0 12 18z"/><path d="M12 5a3 3 0 0 1 5.9-.8A3 3 0 0 1 20 9a3 3 0 0 1-.5 5.5 3.5 3.5 0 0 1-4.5 5.3A3 3 0 0 1 12 18"/><path d="M12 5v13M8 10h1.5M14.5 10H16M8.5 14.5H10M14 14.5h1.5"/>',
+    bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1.5M15 13v1.5M2 14h2M20 14h2"/>',
+    message: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 11h7M8.5 14h4"/>',
+    workflow: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M6.5 10v3a2 2 0 0 0 2 2H14"/>',
+    database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+    cap: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5M22 10v5"/>',
+    send: '<path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/>',
+    layout: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M3 9h18M9 21V9"/>',
+    server: '<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/>',
+    wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5"/><path d="M16 14h.01"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+    code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
+    music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    film: '<rect x="2" y="3" width="20" height="18" rx="2.5"/><path d="M7 3v18M17 3v18M2 8h5M17 8h5M2 16h5M17 16h5M2 12h20"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+    palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.3A5.7 5.7 0 0 0 22 9.7C22 5.4 17.5 2 12 2z"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    package: '<path d="m21 8-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/>',
+    cloud: '<path d="M17.5 19H7a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 11a4 4 0 0 1-1.5 8z"/>',
+    puzzle: '<path d="M15 4h4a1 1 0 0 1 1 1v4h-1.5a2 2 0 1 0 0 4H20v6a1 1 0 0 1-1 1h-6v-1.5a2 2 0 1 0-4 0V20H5a1 1 0 0 1-1-1v-4h1.5a2 2 0 1 0 0-4H4V5a1 1 0 0 1 1-1h4v1.5a2 2 0 1 0 4 0V4z"/>',
+    cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+    building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/>',
+    bookOpen: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2zM22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
+    kanban: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M8 7v7M12 7v4M16 7v9"/>',
+    question: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2.5"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    archive: '<rect x="2" y="3" width="20" height="5" rx="1.5"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+    chevron: '<path d="m6 9 6 6 6-6"/>',
+    sparkles: '<path d="M12 3l1.8 4.9L19 9.5l-5.2 1.6L12 16l-1.8-4.9L5 9.5l5.2-1.6z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+  };
+  const CATEGORY_ICONS = { agents: "bot", prompts: "message", automation: "workflow", data: "database", knowledge: "book",
+    media: "image", elearning: "cap", telegram: "send", frontend: "layout", devops: "server", business: "briefcase", finance: "wallet" };
+  // Направления, которые модель завела сама, — иконка по словам в названии.
+  const ICON_WORDS = [
+    [/secur|безопас|защит|auth|приват/i, "shield"], [/код|code|dev|разраб|program|github/i, "code"],
+    [/аналит|analyt|метрик|dashboard|chart/i, "chart"], [/music|музык|audio|аудио|звук|голос|voice/i, "music"],
+    [/video|видео|film|кино/i, "film"], [/search|поиск|seo/i, "search"], [/design|дизайн|figma|ui|ux/i, "palette"],
+    [/mail|почт|email|рассыл/i, "mail"], [/web|сайт|браузер|browser/i, "globe"], [/data|данн|таблиц|sql|excel/i, "database"],
+    [/agent|агент|бот|bot|ai\b|ии\b/i, "bot"], [/learn|курс|обуч|school|educat/i, "cap"], [/финанс|finance|money|учёт|бухгалт/i, "wallet"],
+    [/hosting|хостинг|deploy|devops|server|облак|cloud/i, "server"], [/note|замет|знан|knowledge|rag/i, "book"],
+  ];
+  const KIND_ICONS = { library: "package", tool: "wrench", platform: "cloud", agent: "bot", skill: "cap", plugin: "puzzle",
+                       extension: "puzzle", model: "cpu", company: "building", resource: "bookOpen" };
+  function svgIcon(name) {
+    const span = document.createElement("span");
+    span.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.folder}</svg>`;
+    return span.firstChild;
+  }
+  function categoryIconName(slug, title) {
+    if (CATEGORY_ICONS[slug]) return CATEGORY_ICONS[slug];
+    const hit = ICON_WORDS.find(([re]) => re.test(slug + " " + title));
+    return hit ? hit[1] : "folder";
+  }
+  function groupIconName(g) {
+    if (by === "month") return "calendar";
+    if (by === "site") return { github: "code", git: "code", hf: "cpu", tg: "send", ext: "puzzle", pkg: "package",
+                                app: "layout", video: "film", read: "bookOpen" }[g.key] || "globe";
+    if (g.key === "_none") return "question";
+    if (g.key === "_misc") return "sparkles";
+    if (by === "category") return categoryIconName(g.key, g.title);
+    if (by === "kind") return KIND_ICONS[g.key] || "question";
+    if (by === "project") return "kanban";
+    return "building";
+  }
+  function icoSvg(name, color) {
+    const i = el("div", "ico " + (color ? "tint" : "plain"));
+    if (color) i.style.setProperty("--c", color);
+    i.appendChild(svgIcon(name));
+    return i;
+  }
+  // Иконка записи: favicon сайта / аватар GitHub (data: из файла иконок по ключу ik), иначе иконка типа.
+  function entryIcon(e) {
+    const fallback = () => e.catalog ? icoSvg(hostOf(e.url) === "github.com" ? "code" : "globe") : icoSvg(KIND_ICONS[e.kind] || "question");
+    const src = (e.ik && icons[e.ik]) || e.icon;
+    if (src && /^data:image\/(png|jpeg|gif|webp|x-icon);base64,/.test(src)) {
+      const i = el("div", "ico fav");
+      const img = document.createElement("img");
+      img.alt = ""; img.src = src; img.decoding = "async";
+      img.onerror = () => i.replaceWith(fallback());
+      i.appendChild(img);
+      return i;
+    }
+    return fallback();
+  }
+  $("logo").appendChild(svgIcon("brain"));
+
+  // ---------------------------------------------------------------- движение
+  // Карточки не пересоздаются: у каждой свой элемент (elById) и текущее положение на экране (cur).
+  // render() считает новую раскладку, а аниматор ведёт каждую карточку от того, где она сейчас,
+  // к новому месту. Новые вырастают из родителя волной, ушедшие сворачиваются в родителя.
+  // Связи рисуются каждый кадр от текущих положений — поэтому тянутся за карточками.
+  const elById = new Map();
+  const cur = new Map();          // id → {x, y, w, h, o, s} — что сейчас на экране
+  let tweens = new Map();         // id → {from, to, delay, dur, exit}
+  let drawnEdges = [];            // связи, которые рисуем (включая уходящие)
+  let edgeStyle = () => "";       // класс связи (подсветка поиска)
+  let motionRaf = null, motionT0 = 0;
+  const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const easeInOut = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const parentId = (n) => n.type === "root" ? null : n.type === "group" ? "root" : "g:" + n.group.key;
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  function placeNode(id, p) {
+    const d = elById.get(id);
+    if (!d) return;
+    d.style.left = p.x + "px"; d.style.top = p.y + "px";
+    d.style.opacity = p.o >= 0.999 ? "" : String(p.o);
+    d.style.transform = p.s >= 0.999 ? "" : `scale(${p.s})`;
+  }
+
+  function drawEdges() {
+    let svg = "";
+    const dots = new Set();
+    for (const e of drawnEdges) {
+      const A = cur.get(e.a), B = cur.get(e.b);
+      if (!A || !B) continue;
+      const x1 = e.dir > 0 ? A.x + A.w : A.x, y1 = A.y + A.h / 2;
+      const x2 = e.dir > 0 ? B.x : B.x + B.w, y2 = B.y + B.h / 2;
+      const o = Math.min(A.o, B.o);
+      if (o <= 0.01) continue;
+      const cls = edgeStyle(e);
+      const op = o < 0.999 ? ` style="opacity:${o.toFixed(3)}"` : "";
+      svg += `<path class="${cls}"${op} d="${elbow(x1, y1, x2, y2)}"/>`;
+      svg += `<circle class="${cls === "faded" ? "faded" : ""}"${op} cx="${x2}" cy="${y2}" r="3.2"/>`;
+      const key = e.a + e.dir;
+      if (!dots.has(key)) { dots.add(key); svg += `<circle${op} cx="${x1}" cy="${y1}" r="3.2"/>`; }
+    }
+    edgesEl.innerHTML = svg + relPaths();
+  }
+
+  function stepMotion(now) {
+    let running = false;
+    for (const [id, tw] of tweens) {
+      const t = Math.min(1, Math.max(0, (now - motionT0 - tw.delay) / tw.dur));
+      const e = tw.exit ? easeInOut(t) : easeOut(t);
+      const p = {
+        x: lerp(tw.from.x, tw.to.x, e), y: lerp(tw.from.y, tw.to.y, e),
+        w: tw.to.w, h: tw.to.h,
+        o: lerp(tw.from.o, tw.to.o, Math.min(1, t * (tw.exit ? 1.4 : 1.8))),
+        s: lerp(tw.from.s, tw.to.s, e),
+      };
+      cur.set(id, p);
+      placeNode(id, p);
+      if (t < 1) running = true;
+      else if (tw.exit) { elById.get(id)?.remove(); elById.delete(id); cur.delete(id); tweens.delete(id); }
+    }
+    drawEdges();
+    if (running) motionRaf = requestAnimationFrame(stepMotion);
+    else { world.classList.remove("animating"); drawnEdges = drawnEdges.filter((e) => cur.has(e.a) && cur.has(e.b)); }
+  }
+
+  function fillNode(d, n, q) {
+    d.className = "node " + n.type;
+    d.dataset.id = n.id;
+    d.replaceChildren();
+    d.removeAttribute("role"); d.removeAttribute("tabindex"); d.removeAttribute("aria-expanded"); d.removeAttribute("title");
+    d.style.width = n.w + "px"; d.style.height = n.h + "px";
+    if (n.type === "root") {
+      d.classList.add("card");
+      const logo = el("div", "ico"); logo.appendChild(svgIcon(mode === "catalog" ? "archive" : "brain"));
+      d.append(cardHead(logo, mode === "catalog" ? "Каталог" : "Мозг Флоки", mode === "catalog" ? "архив" : "live"),
+               inner(mode === "catalog" ? "Всего в каталоге" : "Всего в мозге", records(n.count), "· " + branches(n.groups)));
+    } else if (n.type === "group") {
+      d.classList.add("card");
+      d.setAttribute("role", "button"); d.tabIndex = 0;
+      d.setAttribute("aria-expanded", String(n.open));
+      const icon = icoSvg(groupIconName(n.group), n.color);
+      const busy = n.group.items.filter((e) => e.status === "trying" || e.status === "adopted").length;
+      d.append(cardHead(icon, n.group.title, n.open ? "раскрыто" : "свёрнуто", n.open ? "" : "off"),
+               inner(by === "project" ? "Пригодится проекту" : "Записей", records(n.group.items.length), busy ? `· в работе ${busy}` : ""));
+      if (q && !n.group.items.some((e) => matches(e, q))) d.classList.add("dim");
+    } else if (n.type === "leaf") {
+      const e = n.entry, k = data.kinds[e.kind];
+      d.classList.add("card");
+      d.setAttribute("role", "button"); d.tabIndex = 0;
+      // Производитель совпадает с именем (Remotion / Remotion) — не повторяем, пишем тип.
+      const maker = e.maker && e.maker.toLowerCase() !== e.name.toLowerCase() ? e.maker : "";
+      d.append(cardHead(entryIcon(e), e.name, STATUS[e.status] || "", e.status),
+               e.catalog ? inner(null, (by === "month" ? fmtDay(e.posted_at) : fmtDate(e.posted_at)) || e.id, hostOf(e.url))
+                         : inner(null, maker || (k ? k.title : e.id), maker && k ? k.title : ""));
+      d.title = e.why || e.name;
+      if (q) {
+        if (matches(e, q)) { d.classList.add("hit"); hits.push(n); }
+        else d.classList.add("dim");
+      }
+    } else if (n.type === "more") {
+      d.setAttribute("role", "button"); d.tabIndex = 0;
+      d.textContent = "Ещё " + records(n.more) + " →";
+    }
+    if (n.id === selected) markSelected(d);
+  }
+
+  function render(opts = {}) {
+    if (!data) return;
+    document.body.classList.toggle("view-grid", viewMode === "grid");
+    document.body.classList.toggle("view-map", viewMode === "map");
+    viewMode === "grid" ? renderGrid(opts) : renderMap(opts);
+  }
+  function metaText(count, groups) {
+    let meta = records(count) + " · " + (viewMode === "grid" ? groups + " " + plural(groups, "раздел", "раздела", "разделов") : branches(groups));
+    if (SOURCE === "enc" && live) meta += " · свежее с ПК";
+    else if (SOURCE === "enc" && data.generated_at) {
+      const t = new Date(data.generated_at);
+      meta += " · снимок " + t.toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    }
+    return meta;
+  }
+  function emptyState(count) {
+    if (mode === "catalog" && !catalogItems.length) return stateCard("Каталог пуст", "Импортируй архив канала: /brain import — подробности в боте.");
+    if (mode === "brain" && !data.entries.length) return stateCard("Мозг пока пуст", "Кинь ссылку в группу мозга — она появится здесь.");
+    if (!count) return stateCard("Ничего не подходит", "Сними фильтры.");
+    return null;
+  }
+
+  function renderMap(opts = {}) {
+    layout = computeLayout();
+    const q = query.trim().toLowerCase();
+    $("meta").textContent = metaText(layout.entries.length, layout.groups.length);
+    showState(emptyState(layout.entries.length));
+
+    hits = [];
+    const target = new Map(layout.nodes.map((n) => [n.id, n]));
+    const newTweens = new Map();
+    let fresh = 0;
+    const firstRun = cur.size === 0;
+    for (const n of layout.nodes) {
+      let d = elById.get(n.id);
+      const isNew = !d;
+      if (!d) { d = el("div"); elById.set(n.id, d); nodesEl.appendChild(d); }
+      fillNode(d, n, q);
+      const to = { x: n.x, y: n.y, w: n.w, h: n.h, o: 1, s: 1 };
+      let from = !isNew ? cur.get(n.id) : null;
+      let delay = 0;
+      if (!from) {
+        // Новая карточка растёт из родителя: из его нового места (он может и сам ещё лететь).
+        const pid = parentId(n);
+        const par = (pid && target.get(pid)) || n;
+        from = { x: par.x + par.w / 2 - n.w / 2, y: par.y + par.h / 2 - n.h / 2, w: n.w, h: n.h, o: 0, s: 0.82 };
+        const depth = n.type === "root" ? 0 : n.type === "group" ? 1 : 2;
+        delay = firstRun ? depth * 110 + Math.min(fresh * 14, 320) : Math.min(fresh * 16, 260);
+        fresh++;
+      }
+      newTweens.set(n.id, { from: { ...from }, to, delay, dur: 440 });
+    }
+    // Ушедшие карточки сворачиваются в своего родителя (или в корень) и исчезают.
+    for (const [id, d] of elById) {
+      if (target.has(id)) continue;
+      const was = cur.get(id);
+      if (!was) { d.remove(); elById.delete(id); continue; }
+      const pid = d.dataset.id.startsWith("g:") ? "root" : "g:" + (d.dataset.id.split(":")[1] || "");
+      const par = target.get(pid) || target.get("root");
+      d.classList.add("leaving");
+      newTweens.set(id, { from: { ...was }, to: { x: par.x + par.w / 2 - was.w / 2, y: par.y + par.h / 2 - was.h / 2, w: was.w, h: was.h, o: 0, s: 0.82 }, delay: 0, dur: 300, exit: true });
+    }
+
+    const hitIds = new Set(hits.map((h) => h.id));
+    const hitGroups = new Set(hits.map((h) => h.group.key));
+    edgeStyle = (e) => !q ? "" : (e.lid ? hitIds.has(e.lid) : hitGroups.has(e.gid.slice(2))) ? "hot" : "faded";
+    const keep = new Set(layout.edges.map((e) => e.a + ">" + e.b));
+    drawnEdges = [...layout.edges, ...drawnEdges.filter((e) => !keep.has(e.a + ">" + e.b) && newTweens.get(e.b)?.exit)];
+
+    cancelAnimationFrame(motionRaf);
+    tweens = newTweens;
+    if (opts.instant || reduceMotion()) {
+      for (const [id, tw] of tweens) {
+        if (tw.exit) { elById.get(id)?.remove(); elById.delete(id); cur.delete(id); continue; }
+        cur.set(id, { ...tw.to }); placeNode(id, tw.to);
+      }
+      tweens = new Map();
+      drawnEdges = layout.edges;
+      drawEdges();
+    } else {
+      for (const [id, tw] of tweens) { cur.set(id, { ...tw.from }); placeNode(id, tw.from); }
+      world.classList.add("animating");
+      motionT0 = performance.now();
+      motionRaf = requestAnimationFrame(stepMotion);
+    }
+
+    $("qcount").textContent = q ? String(hits.length) : "";
+    if (firstFit && layout.entries.length) { firstFit = false; fit(false); }
+  }
+
+  // ---------------------------------------------------------------- сетка
+  // Разделы (направления, типы, месяцы…) с липкими заголовками, в каждом — сетка карточек.
+  // Сразу рисуем пару рядов на раздел, остальное — по «Ещё N»: тысячи записей каталога не тормозят.
+  // Поиск — одна лента, от самых близких к запросу.
+  const gridEl = $("grid");
+  const gridCollapsed = {};   // by → Set(ключ раздела)
+  const gridShown = new Map(); // by:ключ → сколько карточек показано
+  let gridAnimNext = true;
+  function gridCols() {
+    const w = gridEl.clientWidth - (window.innerWidth < 760 ? 20 : 32);
+    const min = window.innerWidth < 760 ? 300 : 262;
+    return Math.max(1, Math.floor((Math.min(w, 1480) + 12) / (min + 12)));
+  }
+  function updateGridTop() {
+    let bottom = 0;
+    for (const id of ["brand", "groupby", "filters"]) {
+      const n = $(id);
+      if (!n || getComputedStyle(n).display === "none") continue;
+      const r = n.getBoundingClientRect();
+      if (r.top < 260) bottom = Math.max(bottom, r.bottom);
+    }
+    document.documentElement.style.setProperty("--gtop", Math.round(bottom + 18) + "px");
+  }
+  function gridCard(e, color, i, search) {
+    const k = data.kinds[e.kind];
+    const c = el("article", "gcard");
+    c.dataset.id = e.id; c.tabIndex = 0; c.setAttribute("role", "button");
+    if (e.ik) { c.dataset.ik = e.ik; c.dataset.url = e.url; c.dataset.kind = e.kind || ""; c.dataset.cat = e.catalog ? "1" : ""; }
+    c.style.setProperty("--c", color); c.style.setProperty("--i", String(Math.min(i, 24)));
+    c.appendChild(cardHead(entryIcon(e), e.name, STATUS[e.status] || "", e.status));
+    c.appendChild(el("p", "gwhy" + (e.why ? "" : " none"), e.why || (e.catalog ? "Текста поста нет." : "Описания пока нет.")));
+    const meta = el("div", "gmeta");
+    const tag = (text, icon, tint) => {
+      if (!text) return;
+      const t = el("span", "gtag" + (tint ? " c" : ""));
+      if (tint) t.style.setProperty("--tc", tint);
+      if (icon) t.appendChild(svgIcon(icon));
+      t.append(text);
+      meta.appendChild(t);
+    };
+    if (e.catalog) {
+      if (by !== "category" && e.category) tag(catTitle(e.category), null, catColor(e.category));
+      if (by !== "kind" && k) tag(k.title, KIND_ICONS[e.kind]);
+      tag(by === "month" ? fmtDay(e.posted_at) : fmtDate(e.posted_at), "calendar");
+      if (by === "month" || by === "site") tag(hostOf(e.url), "globe");
+    } else {
+      if ((search || by !== "category") && e.category) tag(catTitle(e.category), null, catColor(e.category));
+      if ((search || by !== "kind") && k) tag(k.title, KIND_ICONS[e.kind]);
+      const maker = e.maker && e.maker.toLowerCase() !== e.name.toLowerCase() ? e.maker : "";
+      if (by !== "maker" && maker) tag(maker, "building");
+      const rn = (rels.get(e.id) || []).length;
+      if (rn) tag("⇄ " + rn, null);
+      if (e.price && !/^цена\s*\?|не\s+знаю/i.test(e.price)) tag(e.price.split(" · ")[0].slice(0, 28), "wallet");
+    }
+    meta.childElementCount && c.appendChild(meta);
+    if (e.id === selected) c.classList.add("sel");
+    return c;
+  }
+  const catColors = new Map();
+  function catTitle(slug) { const c = data.categories.find((x) => x.slug === slug); return c ? c.title : slug; }
+  function catColor(slug) {
+    if (!catColors.has(slug)) {
+      const i = data.categories.findIndex((x) => x.slug === slug);
+      catColors.set(slug, PALETTE[(i < 0 ? catColors.size : i) % PALETTE.length]);
+    }
+    return catColors.get(slug);
+  }
+  function gridSection(g, items, search) {
+    const key = by + ":" + g.key;
+    const cols = gridCols();
+    const first = search ? Math.max(12, cols * 6) : Math.max(4, cols * 2);
+    const collapsed = !search && (gridCollapsed[by] || new Set()).has(g.key);
+    const sec = el("section", "gsec");
+    sec.style.setProperty("--c", g.color);
+    sec.dataset.key = g.key;
+    const h = el("button", "ghead");
+    h.setAttribute("aria-expanded", String(!collapsed));
+    h.append(icoSvg(search ? "search" : groupIconName(g), g.color), el("span", "ttl", g.title), el("span", "cnt", String(items.length)), el("span", "line"));
+    if (!search) { const chev = svgIcon("chevron"); chev.classList.add("chev"); h.appendChild(chev); }
+    sec.appendChild(h);
+    if (!search) h.onclick = () => {
+      const set = gridCollapsed[by] = gridCollapsed[by] || new Set();
+      set.has(g.key) ? set.delete(g.key) : set.add(g.key);
+      if (inTelegram) haptic("light");
+      const top = sec.getBoundingClientRect().top;
+      renderGrid({ quiet: true, opened: set.has(g.key) ? null : g.key });
+      // заголовок остаётся на месте — сетка не прыгает под пальцем
+      const again = gridEl.querySelector(`.gsec[data-key="${CSS.escape(g.key)}"]`);
+      if (again) gridEl.scrollTop += again.getBoundingClientRect().top - top;
+    };
+    if (collapsed) return sec;
+    const shown = Math.min(items.length, gridShown.get(key) || first);
+    const box = el("div", "gcards");
+    items.slice(0, shown).forEach((e, i) => box.appendChild(gridCard(e, g.color, i, search)));
+    sec.appendChild(box);
+    let upto = shown;
+    const addMore = () => {
+      if (items.length <= upto) return;
+      const more = el("button", "gmore", "Ещё " + records(items.length - upto));
+      more.onclick = () => {
+        const next = Math.min(items.length, upto + Math.max(12, gridCols() * 6));
+        const frag = document.createDocumentFragment();
+        items.slice(upto, next).forEach((e, i) => frag.appendChild(gridCard(e, g.color, i, search)));
+        frag.querySelectorAll(".gcard").forEach((c) => c.classList.add("fresh"));
+        box.appendChild(frag);
+        upto = next; gridShown.set(key, next);
+        more.remove(); addMore();
+      };
+      sec.appendChild(more);
+    };
+    addMore();
+    return sec;
+  }
+  function renderGrid(opts = {}) {
+    updateGridTop();
+    const q = query.trim().toLowerCase();
+    scores = searchScores(q);
+    const entries = visibleEntries();
+    const frag = document.createDocumentFragment();
+    frag.appendChild(el("div", "gpad"));
+    let count = entries.length, nGroups;
+    if (q) {
+      const found = entries.filter((e) => scores.has(e)).sort((a, b) => scores.get(b) - scores.get(a));
+      nGroups = found.length ? 1 : 0;
+      if (found.length) frag.appendChild(gridSection({ key: "_search", title: "Найдено по запросу", color: "var(--accent)" }, found, true));
+      else frag.appendChild(stateCard("Ничего не нашлось", "Попробуй другими словами — поиск понимает синонимы: «парсинг» найдёт scraper."));
+      count = found.length;
+      $("qcount").textContent = String(found.length);
+    } else {
+      const groups = groupsFor(entries);
+      nGroups = groups.length;
+      for (const g of groups) frag.appendChild(gridSection(g, g.items, false));
+      $("qcount").textContent = "";
+    }
+    if (frag.lastChild && frag.lastChild.classList && frag.lastChild.classList.contains("card")) frag.lastChild.classList.add("gempty");
+    const animate = !opts.quiet && gridAnimNext && !reduceMotion();
+    gridEl.classList.toggle("anim", animate);
+    gridEl.replaceChildren(frag);
+    if (opts.opened) {
+      gridEl.querySelectorAll(`.gsec[data-key="${CSS.escape(opts.opened)}"] .gcard`).forEach((c) => c.classList.add("fresh"));
+    }
+    $("meta").textContent = metaText(q ? count : entries.length, nGroups);
+    const empty = q ? null : emptyState(entries.length);
+    showState(empty);
+    gridAnimNext = false;
+  }
+  function gridOpen(card) {
+    const e = (mode === "catalog" ? catalogItems : data.entries).find((x) => x.id === card.dataset.id);
+    if (!e) return;
+    if (inTelegram) haptic("select");
+    gridEl.querySelectorAll(".gcard.sel").forEach((x) => x.classList.remove("sel"));
+    card.classList.add("sel");
+    selected = e.id;
+    openPanel({ entry: e });
+  }
+  gridEl.addEventListener("click", (ev) => {
+    const card = ev.target.closest(".gcard");
+    if (card) gridOpen(card);
+  });
+  gridEl.addEventListener("keydown", (ev) => {
+    const card = ev.target.closest(".gcard");
+    if (card && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); gridOpen(card); }
+  });
+  function setView(v) {
+    viewMode = v; store.set("brainView", v);
+    document.querySelectorAll("#viewSw .btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+    closePanel();
+    gridAnimNext = true; firstFit = true;
+    render();
+    if (v === "map") fit(false);
+  }
+  document.querySelectorAll("#viewSw .btn").forEach((b) => { b.onclick = () => { if (b.dataset.view !== viewMode) setView(b.dataset.view); }; });
+  document.querySelectorAll("#viewSw .btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === viewMode)));
+
+  function markSelected(d) {
+    d.classList.add("sel");
+    for (const [x, y] of [[-8, -8], [1, -8], [-8, 1], [1, 1]]) {
+      const h = el("span", "h4");
+      h.style.left = x === 1 ? "calc(100% + 2px)" : x + "px";
+      h.style.top = y === 1 ? "calc(100% + 2px)" : y + "px";
+      d.appendChild(h);
+    }
+  }
+
+  // ---------------------------------------------------------------- фильтры
+  function buildFilters() {
+    const box = $("filters");
+    box.replaceChildren();
+    const counts = {};
+    for (const e of data.entries) counts[e.kind || ""] = (counts[e.kind || ""] || 0) + 1;
+    const kinds = Object.entries(data.kinds).filter(([k]) => counts[k]);
+    if (counts[""]) kinds.push(["", { title: "без типа" }]);
+    for (const [k, v] of kinds) {
+      const b = el("button", "chip", `${v.title} · ${counts[k]}`);
+      b.prepend(svgIcon(KIND_ICONS[k] || "question"));
+      b.setAttribute("aria-pressed", String(kindFilter.has(k)));
+      b.onclick = () => {
+        kindFilter.has(k) ? kindFilter.delete(k) : kindFilter.add(k);
+        b.setAttribute("aria-pressed", String(kindFilter.has(k)));
+        updateFilterBadge(); render();
+      };
+      box.appendChild(b);
+    }
+    // Статусы: что пробую, что внедрено, что отложено, что без описания.
+    const sc = {};
+    for (const e of data.entries) sc[e.status] = (sc[e.status] || 0) + 1;
+    const statusIcons = { suggested: "bot", trying: "sparkles", adopted: "shield", parked: "archive", why_missing: "question" };
+    for (const st of ["suggested", "trying", "adopted", "parked", "why_missing"]) {
+      if (!sc[st]) continue;
+      const b = el("button", "chip", `${STATUS[st]} · ${sc[st]}`);
+      b.prepend(svgIcon(statusIcons[st]));
+      b.setAttribute("aria-pressed", String(statusFilter.has(st)));
+      b.onclick = () => {
+        statusFilter.has(st) ? statusFilter.delete(st) : statusFilter.add(st);
+        b.setAttribute("aria-pressed", String(statusFilter.has(st)));
+        updateFilterBadge(); render();
+      };
+      box.appendChild(b);
+    }
+    const rejected = data.entries.filter((e) => e.status === "rejected").length;
+    if (rejected) {
+      const b = el("button", "chip", `отклонённые · ${rejected}`);
+      b.prepend(svgIcon("shield"));
+      b.setAttribute("aria-pressed", String(showRejected));
+      b.onclick = () => { showRejected = !showRejected; b.setAttribute("aria-pressed", String(showRejected)); render(); };
+      box.appendChild(b);
+    }
+    updateFilterBadge();
+  }
+  function updateFilterBadge() {
+    const n = $("filterN");
+    const k = kindFilter.size + statusFilter.size;
+    n.hidden = !k; n.textContent = String(k);
+  }
+  $("filterBtn").onclick = () => {
+    const f = $("filters"), open = !f.classList.contains("open");
+    f.classList.toggle("open", open);
+    $("filterBtn").setAttribute("aria-pressed", String(open));
+    if (viewMode === "grid") requestAnimationFrame(updateGridTop);
+  };
+
+  function buildGroupBy() {
+    const box = $("bys");
+    box.replaceChildren();
+    for (const [key, title] of Object.entries(GROUPINGS[mode])) {
+      const b = el("button", null, title);
+      b.dataset.by = key;
+      b.setAttribute("aria-pressed", String(key === by));
+      b.onclick = () => {
+        by = byOf[mode] = key;
+        store.set(mode === "catalog" ? "brainByCatalog2" : "brainBy", key);
+        box.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        closePanel(); gridAnimNext = true; render(); fit(true); gridEl.scrollTop = 0;
+      };
+      box.appendChild(b);
+    }
+    document.querySelectorAll("#groupby button.mode").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+    $("filterBtn").hidden = mode === "catalog";   // фильтр по типам — только у мозга
+    if (mode === "catalog") { $("filters").classList.remove("open"); }
+    $("q").placeholder = mode === "catalog" ? "Поиск по каталогу" : "Поиск по смыслу";
+  }
+  document.querySelectorAll("#groupby button.mode").forEach((b) => {
+    b.onclick = async () => {
+      if (b.dataset.mode === mode) return;
+      mode = b.dataset.mode; store.set("brainMode", mode);
+      by = byOf[mode];
+      buildGroupBy(); closePanel();
+      if (mode === "catalog" && !(await loadCatalog(true))) return;
+      if (mode === "catalog" && !catalogItems.length) {
+        showState(stateCard("Каталог пуст", "Импортируй архив канала: /brain import — подробности в боте."));
+      }
+      firstFit = true; gridAnimNext = true; render(); fit(true); gridEl.scrollTop = 0;
+    };
+  });
+  buildGroupBy();
+
+  let qTimer = null;
+  $("q").addEventListener("input", (ev) => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => {
+      query = ev.target.value; hitIdx = -1; gridAnimNext = true; render();
+      if (viewMode === "grid") gridEl.scrollTop = 0;
+      else if (query.trim()) fit(true);
+    }, 160);
+  });
+  $("q").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && viewMode === "grid") {
+      const first = gridEl.querySelector(".gcard");
+      if (first) { first.focus(); gridOpen(first); }
+      return;
+    }
+    if (ev.key === "Enter" && hits.length) {
+      hitIdx = (hitIdx + 1) % hits.length;
+      const n = hits[hitIdx];
+      select(n.id); openPanel(n); centerOn(n, true);
+    }
+    if (ev.key === "Escape") { ev.target.value = ""; query = ""; render(); }
+  });
+
+  // ---------------------------------------------------------------- вид: сдвиг и масштаб
+  let settleT = null;
+  function apply() {
+    world.classList.add("moving");
+    clearTimeout(settleT);
+    settleT = setTimeout(() => world.classList.remove("moving"), 150);
+    world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`;
+    const g = 22 * view.s;
+    viewport.style.backgroundSize = `${g}px ${g}px`;
+    viewport.style.backgroundPosition = `${view.x}px ${view.y}px`;
+    const pct = Math.round(view.s * 100);
+    $("zrange").value = String(pct); $("zpct").textContent = pct + "%";
+  }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  function zoomAt(px, py, factor) {
+    const ns = clamp(view.s * factor, 0.15, 2.5), k = ns / view.s;
+    view.x = px - (px - view.x) * k; view.y = py - (py - view.y) * k; view.s = ns;
+    apply();
+  }
+  let anim = null;
+  function animateTo(tx, ty, ts, smooth) {
+    cancelAnimationFrame(anim);
+    if (!smooth || reduceMotion()) { view.x = tx; view.y = ty; view.s = ts; apply(); return; }
+    cancelAnimationFrame(glideRaf);
+    const sx = view.x, sy = view.y, ss = view.s, t0 = performance.now();
+    const dur = Math.min(620, 360 + Math.hypot(tx - sx, ty - sy) / 6 + Math.abs(Math.log(ts / ss)) * 180);
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur), e = easeInOut(p);
+      view.x = sx + (tx - sx) * e; view.y = sy + (ty - sy) * e; view.s = ss + (ts - ss) * e;
+      apply();
+      if (p < 1) anim = requestAnimationFrame(step);
+    };
+    anim = requestAnimationFrame(step);
+  }
+  // Часть холста, не закрытая плавающими панелями.
+  function safeArea() {
+    const narrow = window.innerWidth < 760;
+    const medium = !narrow && window.innerWidth < 1400;   // группировка под шапкой
+    const filtersOpen = $("filters").classList.contains("open");
+    const top = narrow ? (filtersOpen ? 200 : 156) : medium ? (filtersOpen ? 170 : 122) : (filtersOpen ? 124 : 76);
+    const p = $("panel"), open = p.classList.contains("open");
+    const right = open && !narrow ? p.offsetWidth + 24 : 0;
+    const bottom = Math.max(70, open && narrow ? p.offsetHeight : 0);
+    return { top, w: viewport.clientWidth - right, h: viewport.clientHeight - top - bottom };
+  }
+  function fit(smooth) {
+    if (viewMode === "grid") return;
+    const b = layout.bounds; if (!b || !isFinite(b.minX)) return;
+    const a = safeArea(), pad = 28;
+    let s = Math.min((a.w - pad * 2) / (b.maxX - b.minX), (a.h - pad * 2) / (b.maxY - b.minY), 1.1);
+    if (s < 0.42) {
+      // Всё не влезает читаемо — показываем начало дерева в нормальном размере.
+      s = Math.max(0.55, Math.min(0.8, s * 2));
+      const narrow = oneSided();
+      const tx = narrow ? pad - b.minX * s : a.w / 2;
+      const ty = narrow ? a.top + pad - b.minY * s : a.top + a.h / 2;
+      animateTo(tx, ty, s, smooth);
+      return;
+    }
+    const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+    animateTo(a.w / 2 - cx * s, a.top + a.h / 2 - cy * s, s, smooth);
+  }
+  function centerOn(n, smooth) {
+    if (!n || viewMode === "grid") return;
+    const a = safeArea();
+    const s = Math.max(view.s, 0.85);
+    animateTo(a.w / 2 - (n.x + n.w / 2) * s, a.top + a.h / 2 - (n.y + n.h / 2) * s, s, smooth);
+  }
+
+  // Раскрытая ветка целиком (карточка + записи) по ширине экрана, по высоте — у своей карточки.
+  function focusGroup(key) {
+    const part = layout.nodes.filter((n) => n.group && n.group.key === key && n.type !== "root");
+    const g = part.find((n) => n.type === "group");
+    if (!g) return;
+    const minX = Math.min(...part.map((n) => n.x)), maxX = Math.max(...part.map((n) => n.x + n.w));
+    const minY = Math.min(...part.map((n) => n.y)), maxY = Math.max(...part.map((n) => n.y + n.h));
+    const a = safeArea(), pad = 20;
+    const s = clamp(Math.min((a.w - pad * 2) / (maxX - minX), 1), 0.35, 1);
+    const fitsTall = (maxY - minY) * s <= a.h - pad * 2;
+    const cy = fitsTall ? (minY + maxY) / 2 : g.y + g.h / 2;
+    animateTo(a.w / 2 - (minX + maxX) / 2 * s, a.top + a.h / 2 - cy * s, s, true);
+  }
+
+  const midX = () => viewport.clientWidth / 2, midY = () => viewport.clientHeight / 2;
+  function zoomSmooth(factor) {
+    const px = midX(), py = midY(), ns = clamp(view.s * factor, 0.15, 2.5), k = ns / view.s;
+    animateTo(px - (px - view.x) * k, py - (py - view.y) * k, ns, true);
+  }
+  $("zin").onclick = () => zoomSmooth(1.3);
+  $("zout").onclick = () => zoomSmooth(1 / 1.3);
+  $("zrange").addEventListener("input", (ev) => zoomAt(midX(), midY(), (+ev.target.value / 100) / view.s));
+  $("fit").onclick = () => fit(true);
+  $("refresh").onclick = () => { catalog = null; load(false); };
+  $("toggleAll").onclick = () => {
+    if (viewMode === "grid") {
+      const keys = groupsFor(visibleEntries()).map((g) => g.key);
+      const set = gridCollapsed[by] || new Set();
+      gridCollapsed[by] = keys.some((k) => !set.has(k)) ? new Set(keys) : new Set();
+      gridAnimNext = true; renderGrid(); gridEl.scrollTop = 0;
+      return;
+    }
+    const keys = layout.groups.map((g) => g.key);
+    const allOpen = keys.every((k) => expanded[by].has(k));
+    expanded[by] = new Set(allOpen ? [] : keys);
+    render(); fit(true);
+  };
+
+  // Мышь, тачпад, пальцы — одни pointer-события. Тап по узлу ловим сами: при сдвиге это не тап.
+  const pointers = new Map();
+  let downNode = null, moved = false, pinch = null, last = null;
+  // Инерция: отпустил карту на ходу — она докатывается и плавно тормозит.
+  let vel = { x: 0, y: 0 }, lastT = 0, glideRaf = null;
+  function glide() {
+    let prev = performance.now();
+    const step = (now) => {
+      const dt = Math.min(32, now - prev); prev = now;
+      view.x += vel.x * dt; view.y += vel.y * dt;
+      const decay = Math.pow(0.992, dt);
+      vel.x *= decay; vel.y *= decay;
+      apply();
+      if (Math.hypot(vel.x, vel.y) > 0.02) glideRaf = requestAnimationFrame(step);
+    };
+    glideRaf = requestAnimationFrame(step);
+  }
+  viewport.addEventListener("pointerdown", (ev) => {
+    cancelAnimationFrame(glideRaf);
+    vel = { x: 0, y: 0 }; lastT = performance.now();
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pointers.size === 1) {
+      downNode = ev.target.closest(".node"); moved = false; last = { x: ev.clientX, y: ev.clientY };
+    } else if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+      downNode = null; moved = true;
+    }
+  });
+  viewport.addEventListener("pointermove", (ev) => {
+    if (!pointers.has(ev.pointerId)) return;
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pointers.size === 2 && pinch) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      view.x += mx - pinch.mx; view.y += my - pinch.my;
+      zoomAt(mx, my, d / (pinch.d || d));
+      pinch = { d, mx, my };
+    } else if (pointers.size === 1 && last) {
+      const dx = ev.clientX - last.x, dy = ev.clientY - last.y;
+      if (!moved && Math.hypot(dx, dy) < 5) return;
+      if (!moved) { moved = true; viewport.classList.add("panning"); try { viewport.setPointerCapture(ev.pointerId); } catch (_) {} }
+      view.x += dx; view.y += dy; last = { x: ev.clientX, y: ev.clientY };
+      const now = performance.now(), dt = Math.max(1, now - lastT); lastT = now;
+      vel = { x: vel.x * 0.6 + (dx / dt) * 0.4, y: vel.y * 0.6 + (dy / dt) * 0.4 };
+      cancelAnimationFrame(anim); apply();
+    }
+  });
+  const up = (ev) => {
+    if (!pointers.has(ev.pointerId)) return;
+    pointers.delete(ev.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 0) {
+      viewport.classList.remove("panning");
+      if (!moved && ev.type === "pointerup") downNode ? activate(downNode) : closePanel();
+      else if (moved && !reduceMotion() && performance.now() - lastT < 80 && Math.hypot(vel.x, vel.y) > 0.25) glide();
+      downNode = null; last = null;
+    } else if (pointers.size === 1) {
+      const p = [...pointers.values()][0]; last = { x: p.x, y: p.y };
+    }
+  };
+  viewport.addEventListener("pointerup", up);
+  viewport.addEventListener("pointercancel", up);
+  viewport.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    cancelAnimationFrame(glideRaf);
+    // Колесо мыши — масштаб; тачпад — сдвиг двумя пальцами, щипок (ctrlKey) — масштаб.
+    const mouseWheel = ev.deltaMode === 1 || (Math.abs(ev.deltaY) >= 50 && ev.deltaX === 0 && Number.isInteger(ev.deltaY));
+    if (ev.ctrlKey || mouseWheel) zoomAt(ev.clientX, ev.clientY, Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0015)));
+    else { view.x -= ev.deltaX; view.y -= ev.deltaY; apply(); }
+  }, { passive: false });
+  nodesEl.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(ev.target.closest(".node")); }
+  });
+
+  function nodeById(id) { return layout.nodes.find((n) => n.id === id); }
+
+  const haptic = (kind) => { try { kind === "select" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred(kind); } catch (_) {} };
+  function activate(d) {
+    if (!d) return;
+    const n = nodeById(d.dataset.id);
+    if (!n) return;
+    if (inTelegram) haptic(n.type === "leaf" ? "select" : "light");
+    if (n.type === "group") {
+      const set = expanded[by];
+      set.has(n.group.key) ? set.delete(n.group.key) : set.add(n.group.key);
+      render();
+      if (set.has(n.group.key)) focusGroup(n.group.key);
+    } else if (n.type === "more") {
+      showAll.add(by + ":" + n.group.key); render();
+    } else if (n.type === "leaf") {
+      select(n.id); openPanel(n); centerOn(nodeById(n.id), true);
+    } else if (n.type === "root") {
+      fit(true);
+    }
+  }
+  function clearSelection() {
+    nodesEl.querySelectorAll(".sel").forEach((x) => { x.classList.remove("sel"); x.querySelectorAll(".h4").forEach((h) => h.remove()); });
+  }
+  function select(id) {
+    selected = id;
+    clearSelection();
+    const d = nodesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (d) markSelected(d);
+    drawEdges();
+  }
+
+  // ---------------------------------------------------------------- карточка
+  const ICON_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+  const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+  // ---------------------------------------------------------------- связи
+  const REL_TYPES = { alternative: ["альтернатива", "альтернатива"], complements: ["в связке", "в связке"],
+                      replaces: ["заменяет", "заменён на"], built_on: ["построен на", "основа для"] };
+  let rels = new Map();  // id → [{other, type, label, why, src}]
+  function buildRels() {
+    rels = new Map();
+    const push = (id, x) => { if (!rels.has(id)) rels.set(id, []); rels.get(id).push(x); };
+    for (const [a, b, type, why, src] of (data && data.relations) || []) {
+      const t = REL_TYPES[type]; if (!t) continue;
+      push(a, { other: b, type, label: t[0], why, src });
+      push(b, { other: a, type, label: t[1], why, src });
+    }
+  }
+  const entryById = (id) => data.entries.find((x) => x.id === id);
+  function relSection(e) {
+    const list = rels.get(e.id) || [];
+    if (!list.length && !api) return null;
+    const wrap = el("div");
+    wrap.appendChild(el("div", "sechd", "Связи" + (list.length ? " · " + list.length : "")));
+    const box = el("div", "rels");
+    const order = { alternative: 0, replaces: 1, built_on: 2, complements: 3 };
+    for (const r of [...list].sort((a, b) => order[a.type] - order[b.type])) {
+      const o = entryById(r.other);
+      if (!o) continue;
+      const row = el("div", "rel"); row.setAttribute("role", "button"); row.tabIndex = 0;
+      const body = el("div", "body");
+      body.append(el("div", "nm", o.name), el("div", "wy", r.why || o.why || ""));
+      row.append(entryIcon(o), body, el("span", "rtype " + r.type, r.label));
+      if (api) {
+        const rm = el("button", "btn rm"); rm.type = "button"; rm.title = "Убрать связь"; rm.innerHTML = ICON_X;
+        rm.onclick = (ev) => { ev.stopPropagation(); editRelation({ unlink: { a: e.id, b: o.id } }, e); };
+        row.appendChild(rm);
+      }
+      const go = () => jumpTo(o);
+      row.onclick = go;
+      row.onkeydown = (ev) => { if (ev.key === "Enter") go(); };
+      box.appendChild(row);
+    }
+    if (!list.length) box.appendChild(el("div", "note", "Пока нет — модель находит их в фоне, можно добавить и самому."));
+    wrap.appendChild(box);
+    if (api) {
+      const form = el("div", "relform");
+      const inp = el("input"); inp.placeholder = "С чем связать — имя или b-номер"; inp.setAttribute("list", "relNames");
+      let dl = $("relNames");
+      if (!dl) { dl = el("datalist"); dl.id = "relNames"; document.body.appendChild(dl); }
+      dl.replaceChildren(...data.entries.filter((x) => x.id !== e.id).slice(0, 3000).map((x) => { const op = el("option"); op.value = `${x.name} · ${x.id}`; return op; }));
+      const sel = el("select");
+      for (const [t, [label]] of Object.entries(REL_TYPES)) { const op = el("option", null, label); op.value = t; sel.appendChild(op); }
+      const add = el("button", "btn primary", "Связать"); add.type = "button";
+      const msg = el("span", "note");
+      add.onclick = () => {
+        const v = inp.value.trim();
+        const m = v.match(/\b(b-\d+)\s*$/i);
+        const o = m ? entryById(m[1].toLowerCase()) : data.entries.find((x) => x.name.toLowerCase() === v.toLowerCase());
+        if (!o || o.id === e.id) { msg.textContent = "Не нашёл такую запись — выбери из подсказок."; return; }
+        editRelation({ link: { a: e.id, b: o.id, type: sel.value } }, e, msg);
+      };
+      form.append(inp, sel, add);
+      wrap.append(form, msg);
+    }
+    return wrap;
+  }
+  async function editRelation(payload, e, msg) {
+    const res = await apiCall("/api/brain/edit", payload);
+    if (res.error || !res.relations) { if (msg) msg.textContent = res.error || "не сохранилось"; return; }
+    if (inTelegram) haptic("light");
+    data.relations = res.relations; buildRels();
+    render({ quiet: true });
+    openPanel({ entry: e });
+  }
+  // Перейти к связанной записи: открыть её карточку, а в сетке — показать и подсветить.
+  function jumpTo(o) {
+    if (inTelegram) haptic("select");
+    if (viewMode === "grid") {
+      selected = o.id;
+      gridEl.querySelectorAll(".gcard.sel").forEach((x) => x.classList.remove("sel"));
+      const card = gridEl.querySelector(`.gcard[data-id="${CSS.escape(o.id)}"]`);
+      if (card) { card.classList.add("sel"); card.scrollIntoView({ block: "center", behavior: reduceMotion() ? "auto" : "smooth" }); }
+      openPanel({ entry: o });
+      return;
+    }
+    const n = layout.nodes.find((x) => x.type === "leaf" && x.entry.id === o.id);
+    if (n) { select(n.id); openPanel(n); centerOn(n, true); }
+    else openPanel({ entry: o });
+  }
+  // На карте: у выбранной записи — пунктир к связанным, если они на экране.
+  function relPaths() {
+    if (viewMode !== "map" || !selected || !selected.startsWith("l:")) return "";
+    const n = nodeById(selected);
+    if (!n || !n.entry) return "";
+    const want = new Set((rels.get(n.entry.id) || []).map((r) => r.other));
+    if (!want.size) return "";
+    const A = cur.get(n.id);
+    if (!A) return "";
+    let svg = "";
+    const done = new Set();
+    for (const m of layout.nodes) {
+      if (m.type !== "leaf" || !want.has(m.entry.id) || done.has(m.entry.id)) continue;
+      const B = cur.get(m.id);
+      if (!B) continue;
+      done.add(m.entry.id);
+      // Дугой снаружи колонки листьев: соседи по ветке стоят друг под другом, прямая спряталась бы между ними.
+      const out = n.side === "left" ? -1 : 1;
+      const x1 = out > 0 ? A.x + A.w : A.x, y1 = A.y + A.h / 2;
+      const x2 = (m.side === "left" ? -1 : 1) > 0 ? B.x + B.w : B.x, y2 = B.y + B.h / 2;
+      const bulge = 40 + Math.min(160, Math.abs(y2 - y1) * 0.18);
+      const cx = out > 0 ? Math.max(x1, x2) + bulge : Math.min(x1, x2) - bulge;
+      svg += `<path class="rel" d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}"/>`;
+      svg += `<circle cx="${x2}" cy="${y2}" r="3.2" style="fill:var(--sel)"/>`;
+    }
+    return svg;
+  }
+
+  // ---------------------------------------------------------------- правка записи
+  const EDIT_STATUSES = [["new", "новое"], ["trying", "пробую"], ["adopted", "внедрено"], ["parked", "отложено"], ["rejected", "отклонено"]];
+  function editor(e) {
+    const box = el("div", "edit");
+    const orig = {
+      status: ["suggested", "trying", "adopted", "parked", "rejected"].includes(e.status) ? e.status : "new",
+      verdict: e.verdict || "", why: e.why || "", category: e.category || "", kind: e.kind || "",
+      projects: [...e.projects].sort().join(","),
+    };
+    const cur = { ...orig, projects: new Set(e.projects) };
+    const section = (label) => { const w = el("div"); w.appendChild(el("div", "lbl", label)); box.appendChild(w); return w; };
+
+    const sw = section("Статус");
+    const seg = el("div", "seg");
+    const verdict = el("textarea");
+    verdict.placeholder = "Вердикт: что понял, почему пробую или отказался…";
+    verdict.value = cur.verdict; verdict.rows = 2;
+    const paintSeg = () => {
+      seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.st === cur.status)));
+      verdict.hidden = cur.status === "new" || cur.status === "suggested";
+    };
+    // Предложение Claude: пока владелец не выбрал «новое» (взять) или «отклонено» — остаётся предложением.
+    const statuses = e.status === "suggested" ? [["suggested", "от Claude"], ...EDIT_STATUSES] : EDIT_STATUSES;
+    for (const [st, title] of statuses) {
+      const b = el("button", st, title); b.dataset.st = st; b.type = "button";
+      b.onclick = () => { cur.status = st; paintSeg(); changed(); if (st !== "new" && !verdict.value) verdict.focus(); };
+      seg.appendChild(b);
+    }
+    sw.append(seg);
+    verdict.style.marginTop = "8px";
+    verdict.oninput = () => { cur.verdict = verdict.value; changed(); };
+    sw.append(verdict);
+
+    const ww = section("Описание — что это и зачем");
+    const why = el("textarea"); why.rows = 3; why.value = cur.why;
+    why.oninput = () => { cur.why = why.value; changed(); };
+    ww.append(why);
+
+    const kw = section("Тип — что это");
+    const ktags = el("div", "ptags");
+    for (const [k, v] of Object.entries(data.kinds)) {
+      const b = el("button", "chip", v.title); b.type = "button";
+      b.prepend(svgIcon(KIND_ICONS[k] || "question"));
+      b.setAttribute("aria-pressed", String(cur.kind === k));
+      b.onclick = () => {
+        cur.kind = k;
+        ktags.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        changed();
+      };
+      ktags.appendChild(b);
+    }
+    kw.append(ktags);
+
+    const cw = section("Направление");
+    const sel = el("select");
+    const none = el("option", null, "без направления"); none.value = ""; sel.appendChild(none);
+    for (const c of data.categories) { const o = el("option", null, c.title); o.value = c.slug; sel.appendChild(o); }
+    sel.value = cur.category;
+    sel.onchange = () => { cur.category = sel.value; changed(); };
+    cw.append(sel);
+
+    if (data.projects.length) {
+      const pw = section("Пригодится проектам");
+      const tags = el("div", "ptags");
+      for (const pr of data.projects) {
+        const b = el("button", "chip", pr.title); b.type = "button";
+        b.setAttribute("aria-pressed", String(cur.projects.has(pr.slug)));
+        b.onclick = () => {
+          cur.projects.has(pr.slug) ? cur.projects.delete(pr.slug) : cur.projects.add(pr.slug);
+          b.setAttribute("aria-pressed", String(cur.projects.has(pr.slug))); changed();
+        };
+        tags.appendChild(b);
+      }
+      pw.append(tags);
+    }
+
+    const bar = el("div", "savebar");
+    const save = el("button", "btn primary", "Сохранить"); save.type = "button"; save.disabled = true;
+    const msg = el("span", "msg", live ? "" : "бот офлайн — правка не сохранится");
+    bar.append(save, msg);
+    box.appendChild(bar);
+
+    function diff() {
+      const d = {};
+      if (cur.status !== orig.status || (cur.status !== "new" && cur.verdict.trim() !== orig.verdict)) {
+        d.status = cur.status; d.verdict = cur.verdict.trim();
+      }
+      if (cur.why.trim() !== orig.why) d.why = cur.why.trim();
+      if (cur.category !== orig.category) d.category = cur.category || null;
+      if (cur.kind !== orig.kind) d.kind = cur.kind || null;
+      if ([...cur.projects].sort().join(",") !== orig.projects) d.projects = [...cur.projects];
+      return d;
+    }
+    function changed() {
+      const d = diff();
+      save.disabled = !Object.keys(d).length;
+      if (!msg.classList.contains("err")) { msg.className = "msg"; msg.textContent = save.disabled ? "" : "есть изменения"; }
+    }
+    save.onclick = async () => {
+      const d = diff();
+      if (!Object.keys(d).length) return;
+      if (d.why === "") { msg.className = "msg err"; msg.textContent = "описание не может быть пустым"; return; }
+      save.disabled = true; msg.className = "msg"; msg.textContent = "сохраняю…";
+      const res = await apiCall("/api/brain/edit", { id: e.id, ...d });
+      if (res.error || !res.entry) {
+        msg.className = "msg err"; msg.textContent = res.error || "не сохранилось";
+        const link = res.offline && directLink();
+        if (link) { msg.append(" "); msg.appendChild(link); }
+        save.disabled = false;
+        return;
+      }
+      if (inTelegram) haptic("light");
+      Object.assign(e, res.entry);
+      tfCache.delete(e); searchIdx = null;
+      live = live || SOURCE === "enc";
+      buildFilters(); render({ quiet: true });
+      openPanel({ entry: e });
+      const m = $("panel").querySelector(".savebar .msg");
+      if (m) { m.className = "msg ok"; m.textContent = "сохранено ✓"; }
+    };
+    paintSeg();
+    return box;
+  }
+  async function takeToBrain(e, btn, note) {
+    btn.disabled = true; btn.textContent = "Переношу…";
+    const res = await apiCall("/api/brain/edit", { take: e.id }, 15000);
+    if (res.error || !res.brain_id) {
+      btn.disabled = false; btn.textContent = "⭐ Взять в мозг";
+      note.textContent = res.error || "Не получилось";
+      const link = res.offline && directLink();
+      if (link) { note.append(" "); note.appendChild(link); }
+      return;
+    }
+    if (inTelegram) haptic("light");
+    e.brain_id = res.brain_id; e.status = "in_brain";
+    if (res.entry && data && !data.entries.some((x) => x.id === res.entry.id)) data.entries.unshift(res.entry);
+    searchIdx = null;
+    btn.remove();
+    note.textContent = `В мозге: ${res.brain_id}. Модель разложит его за минуту — отчёт придёт в бот.`;
+    render({ quiet: true });
+  }
+
+  function openCatalogPanel(e) {
+    const p = $("panel");
+    p.replaceChildren();
+    if (window.innerWidth < 760) p.appendChild(el("div", "grab"));
+    const head = el("div", "ph");
+    head.appendChild(entryIcon(e));
+    const hb = el("div");
+    hb.appendChild(el("h2", null, e.name));
+    hb.appendChild(el("div", "sub", ["из каталога", fmtDate(e.posted_at), e.source].filter(Boolean).join(" · ")));
+    head.appendChild(hb);
+    const x = el("button", "btn x"); x.setAttribute("aria-label", "Закрыть"); x.innerHTML = ICON_X; x.onclick = closePanel;
+    head.appendChild(x);
+    p.appendChild(head);
+    const body = el("div", "pb");
+    body.appendChild(el("div", "why" + (e.why ? "" : " none"), e.why || "Текста поста нет."));
+    const links = el("div", "links");
+    const add = (u, label) => {
+      const href = safeUrl(u);
+      if (!href) return;
+      const a = el("a"); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.insertAdjacentHTML("afterbegin", ICON_LINK);
+      a.appendChild(el("span", null, label || href.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")));
+      if (inTelegram) a.onclick = (ev) => { ev.preventDefault(); tg.openLink(href); };
+      links.appendChild(a);
+    };
+    [...new Set([e.url, ...e.links])].forEach((u) => add(u));
+    if (e.post_url) add(e.post_url, "Пост в канале");
+    body.appendChild(links);
+    const note = el("div", "note");
+    if (e.brain_id) note.append(`Уже в мозге: ${e.brain_id}.`);
+    else if (api) {
+      const b = el("button", "take", "⭐ Взять в мозг"); b.type = "button";
+      b.onclick = () => takeToBrain(e, b, note);
+      body.appendChild(b);
+      note.append("Модель разложит запись с текстом поста: описание, направление, проекты.");
+    } else { note.append("Взять в мозг: "); note.appendChild(el("code", null, `/brain take ${e.id}`)); }
+    body.appendChild(note);
+    p.appendChild(body);
+    p.classList.add("open"); document.body.classList.add("panel-open");
+    if (inTelegram && tg.BackButton) tg.BackButton.show();
+  }
+
+  function openPanel(n) {
+    if (n.entry.catalog) return openCatalogPanel(n.entry);
+    const e = n.entry, k = data.kinds[e.kind];
+    const cats = Object.fromEntries(data.categories.map((c) => [c.slug, c.title]));
+    const projs = Object.fromEntries(data.projects.map((p) => [p.slug, p.title]));
+    const p = $("panel");
+    p.replaceChildren();
+    if (window.innerWidth < 760) p.appendChild(el("div", "grab"));
+    const head = el("div", "ph");
+    head.appendChild(entryIcon(e));
+    const hb = el("div");
+    hb.appendChild(el("h2", null, e.name));
+    hb.appendChild(el("div", "sub", [k && k.title, e.maker].filter(Boolean).join(" · ") || "тип не определён"));
+    head.appendChild(hb);
+    const x = el("button", "btn x"); x.setAttribute("aria-label", "Закрыть"); x.innerHTML = ICON_X; x.onclick = closePanel;
+    head.appendChild(x);
+    p.appendChild(head);
+
+    const body = el("div", "pb");
+    body.appendChild(el("div", "why" + (e.why ? "" : " none"), e.why || "Описания пока нет."));
+
+    const links = el("div", "links");
+    const seen = new Set();
+    for (const u of [e.url, ...e.links]) {
+      const href = safeUrl(u);
+      if (!href || seen.has(href)) continue;
+      seen.add(href);
+      const a = el("a"); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.insertAdjacentHTML("afterbegin", ICON_LINK);
+      a.appendChild(el("span", null, href.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")));
+      if (inTelegram) a.onclick = (ev) => { ev.preventDefault(); tg.openLink(href); };
+      links.appendChild(a);
+    }
+    body.appendChild(links);
+
+    const rows = el("div", "rows");
+    const row = (label, value) => {
+      if (!value) return;
+      const r = el("div", "row");
+      r.appendChild(el("div", "k", label));
+      const v = el("div", "val");
+      typeof value === "string" ? (v.textContent = value) : v.appendChild(value);
+      r.appendChild(v); rows.appendChild(r);
+    };
+    const relBox = relSection(e);
+    if (relBox) body.appendChild(relBox);
+    if (api) body.appendChild(editor(e));
+    if (!api) {
+      if (STATUS[e.status]) row("Статус", el("span", "pill " + e.status, STATUS[e.status]));
+      row("Направление", cats[e.category] || (e.category ? e.category : "без направления"));
+      if (e.projects.length) {
+        const t = el("div", "tags");
+        e.projects.forEach((s) => t.appendChild(el("span", "tag", projs[s] || s)));
+        row("Проекты", t);
+      }
+    }
+    row("Цена", e.price);
+    if (!api) row("Вердикт", e.verdict);
+    row("Сохранено", e.saved_at ? new Date(e.saved_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "");
+    row("ID", e.id);
+    body.appendChild(rows);
+    if (!api) {
+      const note = el("div", "note");
+      note.append("Править прямо здесь можно, когда бот на ПК подключён к мини-аппу (/webapp). Пока — в боте: ");
+      note.appendChild(el("code", null, `/brain why ${e.id} …`));
+      note.append(" ");
+      note.appendChild(el("code", null, `/brain verdict ${e.id} …`));
+      body.appendChild(note);
+    }
+    p.appendChild(body);
+    p.classList.add("open"); document.body.classList.add("panel-open");
+    if (inTelegram && tg.BackButton) tg.BackButton.show();
+  }
+  // Пришли из «Панели» (переход внутри мини-аппа) — кнопка «назад» Telegram возвращает туда.
+  const fromPanel = inTelegram && SOURCE === "api" && history.length > 1;
+  function closePanel() {
+    const p = $("panel");
+    if (!p.classList.contains("open")) return;
+    p.classList.remove("open"); document.body.classList.remove("panel-open");
+    selected = null;
+    clearSelection();
+    gridEl.querySelectorAll(".gcard.sel").forEach((x) => x.classList.remove("sel"));
+    if (inTelegram && tg.BackButton && !fromPanel) tg.BackButton.hide();
+  }
+  if (inTelegram && tg.BackButton) {
+    if (fromPanel) tg.BackButton.show();
+    tg.BackButton.onClick(() => { $("panel").classList.contains("open") ? closePanel() : fromPanel && history.back(); });
+  }
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closePanel(); });
+
+  // ---------------------------------------------------------------- жизненный цикл
+  let resizeT = null;
+  window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { render({ quiet: true }); fit(false); }, 150); });
+  // Вернулись на страницу — обновим мозг, но не чаще раза в несколько минут: Telegram шлёт это событие
+  // на каждый переход по ссылке, а перекачка снимка на телефоне — секунды.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && data && Date.now() - lastLoad > 5 * 60 * 1000) load(true);
+  });
+  // Inter грузится асинхронно — после загрузки перемеряем подписи.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { widths.clear(); if (data) render({ quiet: true }); });
+  apply();
+  load(false);
+})();
+</script>
+</body>
+</html>
